@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Iterable, List, Optional, Tuple
+
+from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("meeting")
+
+MAX_FILE_MB = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
+MAX_DURATION_SEC = int(os.getenv("MEETING_MAX_DURATION_SEC", "7200"))
+TRANSCRIBE_MODEL = os.getenv("MEETING_TRANSCRIBE_MODEL", "small")
+TRANSCRIBE_DEVICE = os.getenv("MEETING_TRANSCRIBE_DEVICE", "cpu")
+TRANSCRIBE_COMPUTE = os.getenv("MEETING_TRANSCRIBE_COMPUTE", "int8")
+TRANSCRIBE_LANG = os.getenv("MEETING_TRANSCRIBE_LANG", "en")
+LLM_BASE_URL = os.getenv("MEETING_LLM_BASE_URL", "http://localhost:1234/v1")
+LLM_API_KEY = os.getenv("MEETING_LLM_API_KEY", "lm-studio")
+LLM_MODEL = os.getenv("MEETING_LLM_MODEL", "qwen2.5-7b-instruct")
+TRANSLATE_BATCH_SIZE = int(os.getenv("MEETING_TRANSLATE_BATCH_SIZE", "8"))
+
+
+class MeetingError(Exception):
+    pass
+
+
+def fail(message: str, code: int = 2) -> None:
+    log.error(message)
+    raise SystemExit(code)
+
+
+def _handle_exception(exc: Exception) -> None:
+    msg = str(exc)
+    log.error("Meeting pipeline error: %s", msg)
+    raise MeetingError(msg) from exc
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def is_loopback_url(url: str) -> bool:
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    return host in {"127.0.0.1", "localhost", "::1", ""}
+
+
+def enforce_cloud_policy(allow_cloud: bool) -> None:
+    if not allow_cloud and not is_loopback_url(LLM_BASE_URL):
+        fail(
+            f"Cloud LLM is disabled; external URL {LLM_BASE_URL!r}. "
+            f"Pass --allow-cloud explicitly."
+        )
+
+
+def _probe_duration(path: Path) -> float:
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_format", "-of", "json", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise MeetingError(f"ffprobe failed: {proc.stderr[-200:]}")
+        payload = json.loads(proc.stdout or "{}")
+        duration = payload.get("format", {}).get("duration")
+        if duration is None:
+            raise MeetingError("ffprobe did not return duration")
+        return float(duration)
+    except Exception as exc:
+        raise MeetingError(f"Duration probe failed: {exc}") from exc
+
+
+def check_resource_limits(path: Path, *, max_file_mb: Optional[int] = None, max_duration_sec: Optional[int] = None) -> None:
+    size_mb = path.stat().st_size / (1024 * 1024)
+    if max_file_mb is None:
+        max_file_mb = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
+    if max_duration_sec is None:
+        max_duration_sec = int(os.getenv("MEETING_MAX_DURATION_SEC", "7200"))
+    if size_mb > max_file_mb:
+        fail(f"File too large: {size_mb:.1f} MB > {max_file_mb} MB")
+    duration = _probe_duration(path)
+    if duration > max_duration_sec:
+        fail(f"Duration too long: {duration:.0f}s > {max_duration_sec}s")
+
+
+def extract_audio(src: Path, dst: Path) -> Path:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y", "-i", str(src),
+        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+        str(dst),
+    ]
+    log.info("Extracting audio -> %s", dst)
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=False)
+    if res.returncode != 0:
+        fail(f"ffmpeg failed: {res.stderr[-400:]}")
+    if not dst.exists() or dst.stat().st_size == 0:
+        fail("ffmpeg produced empty audio file")
+    return dst
+
+
+def _silence_speakers(segments, silence_gap: float = 1.5):
+    current = 0
+    previous_end = None
+    out = []
+    for seg in segments:
+        start = float(seg["start"])
+        if previous_end is not None and (start - previous_end) > silence_gap:
+            current += 1
+        item = dict(seg)
+        item["speaker_id"] = f"SPEAKER_{current:02d}"
+        out.append(item)
+        previous_end = float(item["end"])
+    return out
+
+
+def transcribe_audio(audio: Path, model: str, language: Optional[str], device: str, compute_type: str) -> Tuple[str, dict]:
+    from faster_whisper import WhisperModel
+    log.info("Loading whisper model=%s device=%s compute_type=%s", model, device, compute_type)
+    m = WhisperModel(model, device=device, compute_type=compute_type)
+    segments_iter, info = m.transcribe(
+        str(audio),
+        language=language,
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
+    )
+    log.info("Detected language=%s duration=%.1fs", info.language, info.duration)
+    segments = []
+    out_lines = []
+    for idx, seg in enumerate(segments_iter, 1):
+        text = seg.text.strip()
+        if not text:
+            continue
+        item = {
+            "id": f"seg_{idx:04d}",
+            "start": float(seg.start),
+            "end": float(seg.end),
+            "text": text,
+            "speaker_id": f"SPEAKER_00",
+        }
+        segments.append(item)
+        start_min = int(seg.start // 60)
+        start_sec = int(seg.start % 60)
+        end_min = int(seg.end // 60)
+        end_sec = int(seg.end % 60)
+        out_lines.append(f"[{start_min:02d}:{start_sec:02d}->{end_min:02d}:{end_sec:02d}] {item['speaker_id']} | {text}")
+    enriched = _silence_speakers(segments)
+    final_lines = []
+    for item, line in zip(enriched, out_lines):
+        final_lines.append(f"{item['id']} {item['speaker_id']} {line}")
+    meta = {
+        "schema_version": "0.1.0",
+        "stt_model": model,
+        "language": info.language,
+        "language_probability": float(getattr(info, "language_probability", 0.0) or 0.0),
+        "no_speech_prob": float(getattr(info, "no_speech_prob", 0.0) or 0.0),
+        "duration": float(info.duration),
+        "segment_count": len(enriched),
+    }
+    return "\n".join(final_lines), meta
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+def _translate_one(client: Any, text: str, target_lang: str) -> str:
+    prompt = (
+        f"Translate to {target_lang}. Keep names/codes/technical terms unchanged. Output ONLY translation, no extra text.\n\n{text}"
+    )
+    return client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+    ).choices[0].message.content.strip()
+
+
+def _chunked(seq: List[str], size: int) -> Iterable[List[str]]:
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def translate_lines(lines: List[str], target_lang: str, allow_cloud: bool) -> List[str]:
+    enforce_cloud_policy(allow_cloud)
+    if not lines:
+        return []
+    from openai import OpenAI
+    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    out: List[str] = []
+    failed = 0
+    head_pat = re.compile(r"^\[(\d{2}:\d{2})->(\d{2}:\d{2})\]\s+(SPEAKER_\d+)\s+\|\s+(.*)$")
+    chunk_buf = []
+    prefix_buf = []
+    for line in lines:
+        m = head_pat.match(line)
+        if m:
+            prefix_buf.append(f"[{m.group(1)}->{m.group(2)}] {m.group(3)} | ")
+            chunk_buf.append(m.group(4))
+        else:
+            prefix_buf.append("")
+            chunk_buf.append(line)
+        if len(chunk_buf) >= TRANSLATE_BATCH_SIZE:
+            try:
+                translated = _translate_one(client, "\n".join(chunk_buf), target_lang)
+                parts = translated.splitlines()
+                if len(parts) != len(chunk_buf):
+                    raise ValueError("Translator returned wrong line count")
+                out.extend(f"{p}{part}" for p, part in zip(prefix_buf[-len(chunk_buf):], parts))
+            except Exception as exc:
+                failed += len(chunk_buf)
+                log.warning("Batch translate failed: %s", exc)
+            finally:
+                chunk_buf.clear()
+                prefix_buf.clear()
+    if chunk_buf:
+        try:
+            translated = _translate_one(client, "\n".join(chunk_buf), target_lang)
+            parts = translated.splitlines()
+            if len(parts) != len(chunk_buf):
+                raise ValueError("Translator returned wrong line count")
+            out.extend(f"{p}{part}" for p, part in zip(prefix_buf, parts))
+        except Exception as exc:
+            failed += len(chunk_buf)
+            log.warning("Batch translate failed: %s", exc)
+    if failed:
+        fail(f"LLM translation failed for {failed} line(s)")
+    return out
+
+
+def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
+    enforce_cloud_policy(allow_cloud)
+    from openai import OpenAI
+    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    system = (
+        "You are a meeting secretary. Extract protocol from transcript ONLY from explicit statements. "
+        "Return JSON ONLY with these keys exactly: "
+        "participants, agenda, decisions, assignments, open_questions, unclear. "
+        "Every item must include source_quote. If assignee or deadline is missing, use unknown/not_set."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": transcript}],
+            temperature=0.1,
+        )
+    except Exception as exc:
+        _handle_exception(exc)
+    content = resp.choices[0].message.content.strip()
+    if content.startswith("```"):
+        content = "\n".join(content.splitlines()[1:])
+    if content.endswith("```"):
+        content = "\n".join(content.splitlines()[:-1])
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as exc:
+        fail(f"LLM returned invalid JSON for protocol: {exc}")
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def validate_protocol(protocol: Optional[dict], transcript: str) -> dict:
+    if not protocol:
+        return {"valid": False, "errors": ["protocol is empty"], "warnings": [], "overall_confidence": 0}
+    errors: List[str] = []
+    warnings: List[str] = []
+    transcript_norm = _normalize(transcript)
+    for section in ["assignments", "decisions", "participants"]:
+        for item in protocol.get(section, []):
+            sq = (item.get("source_quote") or "").strip()
+            if not sq:
+                errors.append(f"{section} item missing source_quote: {str(item)[:80]}")
+                continue
+            sq_norm = _normalize(sq)
+            if sq_norm != transcript_norm and sq_norm not in transcript_norm:
+                words = [w for w in sq_norm.split() if len(w) > 3]
+                if not words or sum(1 for w in words if w in transcript_norm) < len(words):
+                    errors.append(f"{section} source_quote not found: {sq[:80]}")
+            assignee = (item.get("assignee") or "").strip()
+            if assignee and assignee != "unknown":
+                if assignee.lower() not in transcript_norm:
+                    errors.append(f"{section} assignee not grounded: {assignee}")
+            deadline = (item.get("deadline") or "").strip()
+            if deadline and deadline != "not_set":
+                if not re.search(
+                    r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{1,2}[./:]\d{1,2}[./:]\d{2,4}|tmr|tomorrow|week|month|q[1-4])",
+                    deadline,
+                    re.I,
+                ):
+                    warnings.append(f"{section} deadline may be fabricated: {deadline}")
+    confidence = 90
+    if errors:
+        confidence = min(confidence, 25)
+    elif warnings:
+        confidence = min(confidence, 70)
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors[:20],
+        "warnings": warnings[:10],
+        "overall_confidence": confidence,
+    }
+
+
+def atomic_write_json(path: Path, data: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def write_protocol_docx(protocol: dict, path: Path) -> None:
+    if not protocol.get("quality", {}).get("valid"):
+        return
+    from docx import Document
+    from docx.shared import Pt, Cm
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin = Cm(2)
+        section.bottom_margin = Cm(2)
+        section.left_margin = Cm(2)
+        section.right_margin = Cm(1)
+    style = doc.styles["Normal"]
+    style.font.name = "Times New Roman"
+    style.font.size = Pt(14)
+
+    doc.add_heading("Протокол совещания", level=0)
+    doc.add_paragraph("")
+
+    if protocol.get("participants"):
+        doc.add_heading("Участники", level=1)
+        table = doc.add_table(rows=1 + len(protocol["participants"]), cols=2)
+        table.style = "Table Grid"
+        table.rows[0].cells[0].text = "№"
+        table.rows[0].cells[1].text = "Участник"
+        for idx, p in enumerate(protocol["participants"], 1):
+            table.rows[idx].cells[0].text = str(idx)
+            table.rows[idx].cells[1].text = p.get("name", str(p))
+
+    for section_name in ["agenda", "decisions", "assignments", "open_questions"]:
+        items = protocol.get(section_name, [])
+        if not items:
+            continue
+        doc.add_heading(section_name.replace("_", " ").title(), level=1)
+        for idx, item in enumerate(items, 1):
+            text = item.get("text") or item.get("task") or item.get("question") or str(item)
+            doc.add_paragraph(f"{idx}. {text}")
+    doc.save(path)
+
+
+def _now_iso() -> str:
+    return subprocess.check_output(["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], text=True).strip()
+
+
+def cmd_transcribe(args: argparse.Namespace) -> int:
+    src = Path(args.source)
+    if not src.exists():
+        fail(f"File not found: {src}")
+    check_resource_limits(src)
+    audio = src if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"} else src.with_suffix(".wav")
+    if audio != src:
+        extract_audio(src, audio)
+    transcript, meta = transcribe_audio(audio, args.model, args.language, args.device, args.compute_type)
+    out = Path(args.output) if args.output else src.with_suffix(".transcript.txt")
+    out.write_text(transcript, encoding="utf-8")
+    atomic_write_json(out.with_suffix(".transcript.json"), {"source_hash": sha256(src), **meta})
+    log.info("Saved transcript: %s", out)
+    return 0
+
+
+def cmd_translate(args: argparse.Namespace) -> int:
+    src = Path(args.transcript)
+    if not src.exists():
+        fail(f"Transcript not found: {src}")
+    lines = src.read_text(encoding="utf-8").splitlines()
+    translated = translate_lines(lines, args.target_lang, allow_cloud=args.allow_cloud)
+    out = Path(args.output) if args.output else src.with_suffix(".translated.txt")
+    out.write_text("\n".join(translated), encoding="utf-8")
+    log.info("Saved translation: %s", out)
+    return 0
+
+
+def cmd_protocol(args: argparse.Namespace) -> int:
+    src = Path(args.transcript)
+    if not src.exists():
+        fail(f"Transcript not found: {src}")
+    transcript = src.read_text(encoding="utf-8")
+    protocol = build_protocol(transcript, args.model, allow_cloud=args.allow_cloud)
+    validation = validate_protocol(protocol, transcript)
+    protocol["schema_version"] = "0.1.0"
+    protocol["source_hash"] = sha256(src)
+    protocol["stt_model"] = args.model
+    protocol["llm_model"] = LLM_MODEL
+    protocol["created_at"] = _now_iso()
+    protocol["cloud_allowed"] = args.allow_cloud
+    protocol["parameters"] = {
+        "model": args.model,
+        "allow_cloud": args.allow_cloud,
+        "target_lang": getattr(args, "target_lang", None),
+    }
+    protocol["quality"] = validation
+    out_path = Path(args.output) if args.output else src.with_suffix(".protocol.json")
+    if validation["valid"]:
+        atomic_write_json(out_path, protocol)
+        if getattr(args, "docx", False):
+            write_protocol_docx(protocol, src.with_suffix(".protocol.docx"))
+        log.info("Saved protocol: %s", out_path)
+        return 0
+    rejected = out_path.with_suffix(".protocol.rejected.json")
+    atomic_write_json(rejected, protocol)
+    log.error("Invalid protocol saved to: %s", rejected)
+    return 3
+
+
+def cmd_process(args: argparse.Namespace) -> int:
+    src = Path(args.source)
+    if not src.exists():
+        fail(f"File not found: {src}")
+    check_resource_limits(src)
+    audio = src if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"} else src.with_suffix(".wav")
+    if audio != src:
+        extract_audio(src, audio)
+    transcript, transcript_meta = transcribe_audio(audio, args.model, args.language, args.device, args.compute_type)
+    transcript_path = src.with_suffix(".transcript.txt")
+    transcript_path.write_text(transcript, encoding="utf-8")
+    atomic_write_json(transcript_path.with_suffix(".transcript.json"), {"source_hash": sha256(src), **transcript_meta})
+    log.info("Saved transcript: %s", transcript_path)
+
+    if not args.skip_translate:
+        translated = translate_lines(transcript.splitlines(), args.target_lang, allow_cloud=args.allow_cloud)
+        translated_path = src.with_suffix(".translated.txt")
+        translated_path.write_text("\n".join(translated), encoding="utf-8")
+        log.info("Saved translation: %s", translated_path)
+
+    protocol = build_protocol(transcript, args.model, allow_cloud=args.allow_cloud)
+    validation = validate_protocol(protocol, transcript)
+    protocol["quality"] = validation
+    protocol["schema_version"] = "0.1.0"
+    protocol["source_hash"] = sha256(transcript_path)
+    protocol["stt_model"] = args.model
+    protocol["llm_model"] = LLM_MODEL
+    protocol["created_at"] = _now_iso()
+    protocol["cloud_allowed"] = args.allow_cloud
+    protocol["parameters"] = {
+        "model": args.model,
+        "allow_cloud": args.allow_cloud,
+        "target_lang": args.target_lang,
+    }
+    protocol_path = src.with_suffix(".protocol.json")
+    if validation["valid"]:
+        atomic_write_json(protocol_path, protocol)
+        if args.docx:
+            write_protocol_docx(protocol, src.with_suffix(".protocol.docx"))
+        log.info("Saved protocol: %s", protocol_path)
+    else:
+        rejected = protocol_path.with_suffix(".protocol.rejected.json")
+        atomic_write_json(rejected, protocol)
+        log.error("Invalid protocol saved to: %s", rejected)
+    if not validation["valid"]:
+        return 3
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="Meeting Intelligence CLI")
+    sub = p.add_subparsers(dest="command")
+
+    transcribe_p = sub.add_parser("transcribe")
+    transcribe_p.add_argument("source", type=Path)
+    transcribe_p.add_argument("--model", default=TRANSCRIBE_MODEL)
+    transcribe_p.add_argument("--language", default=TRANSCRIBE_LANG)
+    transcribe_p.add_argument("--device", default=TRANSCRIBE_DEVICE)
+    transcribe_p.add_argument("--compute-type", default=TRANSCRIBE_COMPUTE)
+    transcribe_p.add_argument("--output", type=Path, default=None)
+
+    translate_p = sub.add_parser("translate")
+    translate_p.add_argument("transcript", type=Path)
+    translate_p.add_argument("--target-lang", default="ru")
+    translate_p.add_argument("--allow-cloud", action="store_true", default=False)
+    translate_p.add_argument("--output", type=Path, default=None)
+
+    protocol_p = sub.add_parser("protocol")
+    protocol_p.add_argument("transcript", type=Path)
+    protocol_p.add_argument("--model", default=LLM_MODEL)
+    protocol_p.add_argument("--allow-cloud", action="store_true", default=False)
+    protocol_p.add_argument("--docx", action="store_true", default=False)
+    protocol_p.add_argument("--output", type=Path, default=None)
+
+    process_p = sub.add_parser("process")
+    process_p.add_argument("source", type=Path)
+    process_p.add_argument("--model", default=TRANSCRIBE_MODEL)
+    process_p.add_argument("--language", default=TRANSCRIBE_LANG)
+    process_p.add_argument("--device", default=TRANSCRIBE_DEVICE)
+    process_p.add_argument("--compute-type", default=TRANSCRIBE_COMPUTE)
+    process_p.add_argument("--target-lang", default="ru")
+    process_p.add_argument("--skip-translate", action="store_true", default=False)
+    process_p.add_argument("--docx", action="store_true", default=False)
+    process_p.add_argument("--allow-cloud", action="store_true", default=False)
+    process_p.add_argument("--output", type=Path, default=None)
+
+    args = p.parse_args()
+    if not args.command:
+        p.print_help()
+        return 2
+
+    try:
+        if args.command == "transcribe":
+            return cmd_transcribe(args)
+        if args.command == "translate":
+            return cmd_translate(args)
+        if args.command == "protocol":
+            return cmd_protocol(args)
+        if args.command == "process":
+            return cmd_process(args)
+    except MeetingError as exc:
+        fail(str(exc))
+    fail("Unknown command")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
