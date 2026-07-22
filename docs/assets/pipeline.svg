@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 340" width="980" height="340">
+  <defs>
+    <style>
+      .title { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; fill: #e6e8ee; }
+      .label { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #cdd4e0; }
+      .meta { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size: 11px; fill: #9aa3b2; }
+      .badge { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size: 10px; fill: #fff; font-weight: 600; }
+    </style>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1020"/>
+      <stop offset="100%" stop-color="#111a28"/>
+    </linearGradient>
+    <linearGradient id="n1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+    <linearGradient id="n2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#14532d"/>
+    </linearGradient>
+    <linearGradient id="n3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#7c2d12"/>
+    </linearGradient>
+    <linearGradient id="n4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#4c1d95"/>
+    </linearGradient>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#8b93a7"/>
+    </marker>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <rect width="980" height="340" rx="18" fill="url(#bg)"/>
+
+  <!-- Header -->
+  <text x="40" y="46" class="title">hermes-meeting · pipeline</text>
+  <text x="40" y="66" class="meta">Local-first · audio/video → transcript → translation → protocol</text>
+
+  <!-- Nodes -->
+  <g transform="translate(36,110)">
+    <rect x="0" y="0" width="170" height="120" rx="16" fill="url(#n1)"/>
+    <text x="20" y="44" class="label" font-size="14">Audio/Video</text>
+    <text x="20" y="72" class="meta">source media</text>
+    <rect x="20" y="90" width="130" height="22" rx="11" fill="#eab30844" stroke="#eab308"/>
+    <text x="85" y="105" class="badge" text-anchor="middle">STT / Whisper</text>
+  </g>
+
+  <g transform="translate(258,110)">
+    <rect x="0" y="0" width="170" height="120" rx="16" fill="url(#n2)"/>
+    <text x="20" y="44" class="label" font-size="14">Transcript</text>
+    <text x="20" y="72" class="meta">timestamped text</text>
+    <rect x="20" y="90" width="130" height="22" rx="11" fill="#22c55e44" stroke="#22c55e"/>
+    <text x="85" y="105" class="badge" text-anchor="middle">source_quote</text>
+  </g>
+
+  <g transform="translate(480,110)">
+    <rect x="0" y="0" width="170" height="120" rx="16" fill="url(#n3)"/>
+    <text x="20" y="44" class="label" font-size="14">Translation</text>
+    <text x="20" y="72" class="meta">parallel transcript</text>
+    <rect x="20" y="90" width="130" height="22" rx="11" fill="#f59e0b44" stroke="#f59e0b"/>
+    <text x="85" y="105" class="badge" text-anchor="middle">local-first LLM</text>
+  </g>
+
+  <g transform="translate(702,110)">
+    <rect x="0" y="0" width="170" height="120" rx="16" fill="url(#n4)"/>
+    <text x="20" y="44" class="label" font-size="14">Protocol</text>
+    <text x="20" y="72" class="meta">validated meeting protocol</text>
+    <rect x="20" y="90" width="130" height="22" rx="11" fill="#a855f744" stroke="#a855f7"/>
+    <text x="85" y="105" class="badge" text-anchor="middle">audit + docx</text>
+  </g>
+
+  <!-- Arrows -->
+  <line x1="206" y1="170" x2="248" y2="170" stroke="#8b93a7" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="428" y1="170" x2="470" y2="170" stroke="#8b93a7" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="650" y1="170" x2="692" y2="170" stroke="#8b93a7" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- Bottom flow row: process -->
+  <text x="480" y="266" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="22" fill="#cdd4e0" text-anchor="middle">
+    ─ ─ ─ ─
+  </text>
+  <text x="480" y="298" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#9aa3b2" text-anchor="middle">
+    meeting process /path/to/meeting.mp4 --> .transcript → .translate → .protocol → .docx
+  </text>
+
+  <!-- small badges -->
+  <text x="980" y="30" class="meta" text-anchor="end">v0.5.1 · plugin</text>
+</svg>
