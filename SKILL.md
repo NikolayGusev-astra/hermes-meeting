@@ -24,6 +24,26 @@ optional_mcp:
 
 # Meeting Intelligence
 
+## Input sources
+
+Use this skill when the user explicitly points to a source, for example
+"глянь там-то" or "обработай вот это". Detect the source from the attachment,
+message context, or the location the user names, then route it as follows.
+
+| Source | Detect | Route |
+|--------|--------|-------|
+| Direct audio or video file | The user uploads or names a local audio/video file. | Pass the file path to `meeting_transcribe`. |
+| YouTube or other media URL | The user provides a YouTube link or another URL that `yt-dlp` supports. | Download the audio with `yt-dlp`, then pass the downloaded file to `meeting_transcribe`. |
+| Telegram voice message | A voice message is forwarded to the Hermes bot. | Use the forwarded audio attachment as the `meeting_transcribe` source. |
+| Telegram video | A video is forwarded to the Hermes bot. | Use the forwarded video attachment as the `meeting_transcribe` source. |
+| URL shared in Hermes chat | The user shares a link in Hermes chat and asks to process it. | If it is a supported media URL, use the `yt-dlp` route. Otherwise ask for a downloadable media file or transcript. |
+| Email attachment or link | The user explicitly refers to an email, for example "глянь письмо от...", and identifies the sender, subject, or other useful detail. | The explicit request authorizes the Email MCP lookup. Retrieve the attachment or linked media, then transcribe it. Do not search email otherwise. |
+| Local transcript file | The user uploads or names a `.txt`, `.md`, `.srt`, `.vtt`, or similar transcript. | Skip transcription and pass the file to `meeting_agent_transcript`, then analyze it. |
+
+Do not infer a source from unrelated chat history. Ask for the source when the
+user has not pointed to one clearly. Telegram forwarding and an explicitly
+requested email lookup identify a source; they do not authorize any other MCP.
+
 ## Pipeline
 
 ```
