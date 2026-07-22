@@ -31,18 +31,41 @@ required_environment_variables:
 
 # Meeting Intelligence
 
-## Setup
-Install once:
+## Install / Установка
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install .
 ```
 
-## CLI
-Run from the skill directory:
+Or install from wheel:
+
 ```bash
-python "${HERMES_SKILL_DIR}/scripts/meeting_cli.py" process /path/to/meeting.mp4 --model small --language en --device cpu --target-lang ru
+pip install dist/meeting_intelligence-0.5.0-py3-none-any.whl
+```
+
+## CLI / CLI
+
+```bash
+# English
+meeting transcribe meeting.mp4 --model small --language en --device cpu
+meeting translate meeting.transcript.txt --target-lang ru --allow-cloud
+meeting protocol meeting.transcript.txt --model qwen2.5-7b-instruct
+meeting process meeting.mp4 --language en --target-lang ru --docx
+
+# Русский
+meeting transcribe meeting.mp4 --model small --language en --device cpu
+meeting translate meeting.transcript.txt --target-lang ru --allow-cloud
+meeting protocol meeting.transcript.txt --model qwen2.5-7b-instruct
+meeting process meeting.mp4 --language en --target-lang ru --docx
+```
+
+Alternative module invocation:
+
+```bash
+python -m meeting_intelligence transcribe meeting.mp4
 ```
 
 Subcommands:
@@ -51,8 +74,53 @@ Subcommands:
 - `protocol TRANSCRIPT`
 - `process SOURCE`
 
-## Environment
-- `MEETING_LLM_BASE_URL` — OpenAI-compatible local server
-- `MEETING_LLM_API_KEY` — API key
-- `MEETING_LLM_MODEL` — default `qwen2.5-7b-instruct`
-- `MEETING_ALLOW_CLOUD` — default `false`; external endpoints are blocked unless explicitly enabled via `--allow-cloud`
+## Hermes plugin
+
+Register in Hermes config:
+
+```yaml
+plugins:
+  enabled:
+    - meeting-intelligence
+```
+
+Available tools:
+- `meeting_transcribe`
+- `meeting_translate`
+- `meeting_protocol`
+- `meeting_process`
+
+## Environment / Переменные окружения
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MEETING_ALLOW_CLOUD` | `false` | Allow external LLM/STT / Разрешить внешний LLM/STT |
+| `MEETING_LLM_BASE_URL` | `http://localhost:1234/v1` | OpenAI-compatible server / OpenAI-совместимый сервер |
+| `MEETING_LLM_API_KEY` | `lm-studio` | API key / Ключ API |
+| `MEETING_LLM_MODEL` | `qwen2.5-7b-instruct` | Default LLM / Модель LLM по умолчанию |
+| `MEETING_MAX_FILE_MB` | `2048` | File size limit / Лимит размера файла |
+| `MEETING_MAX_DURATION_SEC` | `7200` | Audio/video duration limit / Лимит длительности аудио/видео |
+
+## Safety / Безопасность
+
+- Cloud disabled by default; external endpoints blocked unless `--allow-cloud` is set.
+  / Облако отключено по умолчанию; внешние endpoint блокируются, если не указан `--allow-cloud`.
+- Validation enforces `source_quote` grounding; invalid protocols are rejected and saved as `.protocol.rejected.json`.
+  / Валидация проверяет `source_quote`; невалидные протоколы отклоняются и сохраняются как `.protocol.rejected.json`.
+- No secrets are logged; audit metadata is captured for each run.
+  / Секреты не логируются; для каждого запуска сохраняется audit metadata.
+
+## Test / Тестирование
+
+```bash
+pytest -q
+```
+
+## Artifacts / Артефакты
+
+Current wheel: `dist/meeting_intelligence-0.5.0-py3-none-any.whl`
+SHA256: `05a67b4b25d9edb455a2cd01c3b3886a7eae58e404ff063f0c256f87044ae244`
+
+## License
+
+MIT
