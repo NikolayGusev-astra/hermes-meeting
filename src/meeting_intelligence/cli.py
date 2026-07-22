@@ -94,9 +94,10 @@ def _resolve_source(url_or_path: str | Path) -> Path:
         str(url_or_path),
     ]
     log.info("Downloading audio from URL")
+    clean_env = {k: v for k, v in os.environ.items() if k.lower() not in {"http_proxy", "https_proxy", "all_proxy"}}
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True, timeout=600, check=False
+            command, capture_output=True, text=True, timeout=600, check=False, env=clean_env
         )
     except subprocess.TimeoutExpired as exc:
         raise MeetingError("yt-dlp timed out while downloading audio") from exc
