@@ -16,8 +16,45 @@ pip install .
 Or install from wheel:
 
 ```bash
-pip install dist/meeting_intelligence-0.5.2-py3-none-any.whl
+pip install dist/meeting_intelligence-0.6.0-py3-none-any.whl
 ```
+
+## Quick Start / Быстрый старт
+
+```bash
+pip install '.[local]'                    # LM Studio / локальный режим (по умолчанию)
+# pip install '.[diarization]'            # optional speaker diarization / опциональная диаризация
+```
+
+Set one backend / Выберите один backend:
+
+```bash
+# LM Studio (default) / LM Studio (по умолчанию)
+export MEETING_LLM_BASE_URL=http://localhost:1234/v1
+export MEETING_LLM_API_KEY=lm-studio
+export MEETING_LLM_MODEL=qwen2.5-7b-instruct
+
+# Ollama / Ollama
+export MEETING_LLM_BASE_URL=http://localhost:11434/v1
+export MEETING_LLM_API_KEY=ollama
+export MEETING_LLM_MODEL=llama3.1
+
+# llama.cpp server / сервер llama.cpp
+export MEETING_LLM_BASE_URL=http://localhost:8080/v1
+export MEETING_LLM_API_KEY=llama.cpp
+export MEETING_LLM_MODEL=local-model
+
+# OpenAI cloud / облако OpenAI
+export MEETING_ALLOW_CLOUD=true
+export MEETING_LLM_BASE_URL=https://api.openai.com/v1
+export MEETING_LLM_API_KEY="$OPENAI_API_KEY"
+export MEETING_LLM_MODEL=gpt-4o-mini
+
+# Verify / Проверка
+meeting --help
+```
+
+PowerShell: replace `export NAME=value` with `$env:NAME = "value"`.
 
 ## CLI / CLI
 
@@ -89,8 +126,8 @@ pytest -q
 
 ## Artifacts / Артефакты
 
-Current wheel: `dist/meeting_intelligence-0.5.2-py3-none-any.whl`
-SHA256: `ae63a3c38dae4813ba848ecc09b4156d4c884012ab282094267a1a9d699caae9`
+Current wheel: `dist/meeting_intelligence-0.6.0-py3-none-any.whl`
+SHA256: `5eb34667f0185369bfc48f8b8067f0424c4acfa5c1994ff2d37e7739ca1a5953`
 
 ## License
 

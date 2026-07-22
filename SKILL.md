@@ -1,126 +1,70 @@
 ---
 name: meeting-intelligence
-description: "Local-first meeting intelligence: video/audio -> timestamped transcript -> translated transcript -> validated meeting protocol. Portable across macOS, Windows, Linux."
-version: 0.5.2
-author: Nikolay Gusev
-license: MIT
-platforms: [macos, windows, linux]
-tags:
-  - meetings
-  - transcription
-  - translation
-  - protocol
-  - local-first
-  - hermesskill
-when_to_use: "Use when the user uploads or references meeting audio/video/transcript and needs a trust-minimized transcript, translation, or protocol."
-counter_triggers: "Do not use when the user only needs a quick summary from a short clip and a full pipeline would be overkill."
-metadata:
-  hermes:
-    config:
-      - name: MEETING_ALLOW_CLOUD
-        prompt: Enable external LLM/STT for this run only
-        required_for: Cloud fallback policy
-      - name: MEETING_LLM_BASE_URL
-        prompt: OpenAI-compatible local server base URL
-        required_for: Translation and protocol extraction
-required_environment_variables:
-  - name: MEETING_LLM_API_KEY
-    prompt: API key for the local LLM server
-    required_for: Translation and protocol extraction
+description: "Hermes meeting-intelligence tools for local-first transcription, translation, and evidence-grounded meeting protocols. Use for meeting audio/video or timestamped transcripts when a transcript, translation, protocol, decisions, assignments, or open questions is required."
+version: 0.6.0
+when_to_use:
+  - "Audio/video -> timestamped transcript; transcript -> translation or protocol."
+  - "Need evidence-grounded decisions, assignments, participants, or open questions."
+counter_triggers:
+  - "Do not use for a casual summary of text with no meeting artifact or evidence requirement."
+  - "Do not infer speaker identities, commitments, dates, or decisions absent from the source."
+required_env:
+  - MEETING_LLM_BASE_URL
+  - MEETING_LLM_API_KEY
+  - MEETING_LLM_MODEL
 ---
 
-# Meeting Intelligence
+# Meeting Intelligence / Аналитика встреч
 
-## Install / Установка
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-pip install .
-```
-
-Or install from wheel:
+Install / Установка:
 
 ```bash
-pip install dist/meeting_intelligence-0.5.2-py3-none-any.whl
+pip install 'meeting-intelligence[local]'  # local STT/LLM / локальные STT/LLM
+pip install 'meeting-intelligence[cloud]'  # cloud client / облачный клиент
 ```
 
-## CLI / CLI
+## Tools / Инструменты
 
-```bash
-# English
-meeting transcribe meeting.mp4 --model small --language en --device cpu
-meeting translate meeting.transcript.txt --target-lang ru --allow-cloud
-meeting protocol meeting.transcript.txt --model qwen2.5-7b-instruct
-meeting process meeting.mp4 --language en --target-lang ru --docx
+All tools return a JSON envelope: `{"exit_code": int, "stdout": string, "stderr": string}`. `exit_code: 0` means success; `3` means the protocol failed quality gates. Outputs are files; paths below are defaults. / Все инструменты возвращают JSON-конверт; результаты сохраняются в файлы.
 
-# Русский
-meeting transcribe meeting.mp4 --model small --language en --device cpu
-meeting translate meeting.transcript.txt --target-lang ru --allow-cloud
-meeting protocol meeting.transcript.txt --model qwen2.5-7b-instruct
-meeting process meeting.mp4 --language en --target-lang ru --docx
-```
+| Tool | Inputs / Вход | Output / Выход |
+|---|---|---|
+| `meeting_transcribe` | `source` (required), `model=small`, `language=en`, `device=cpu|cuda`, `compute_type=int8`, `output?` | `<source>.transcript.txt`; `<source>.transcript.json` with `source_hash`, `stt_model`, `language`, `language_probability`, `no_speech_prob`, `duration`, `segment_count`. Lines: `[start->end] SPEAKER_nn | text`. |
+| `meeting_translate` | `transcript` (required), `target_lang=ru`, `allow_cloud=false`, `output?` | `<transcript>.translated.txt`; preserves timestamps and `SPEAKER_nn` prefixes. |
+| `meeting_protocol` | `transcript` (required), `model=qwen2.5-7b-instruct`, `allow_cloud=false`, `docx=false`, `output?` | Valid: `<transcript>.protocol.json` (optional `.protocol.docx`); invalid: `.protocol.rejected.json`. JSON: `participants`, `agenda`, `decisions`, `assignments`, `open_questions`, `unclear`, metadata, `quality`. |
+| `meeting_process` | `source` (required), `stt_model=small`, `llm_model=qwen2.5-7b-instruct`, `language=en`, `device=cpu|cuda`, `compute_type=int8`, `target_lang=ru`, `skip_translate=false`, `docx=false`, `allow_cloud=false` | Transcript + metadata, optional translation, and validated protocol as above. |
 
-Alternative module invocation:
+## Quality gates / Контроль качества
 
-```bash
-python -m meeting_intelligence transcribe meeting.mp4
-```
+- Require `source_quote` for every participant, decision, and assignment; normalize whitespace and verify that the quote is grounded in the transcript. Missing or ungrounded evidence rejects the protocol.
+- Set `quality.overall_confidence`: `90` when valid without warnings, `70` when warnings exist, `25` when validation errors exist; include `quality.valid`, `errors`, and `warnings`.
+- No hallucination / Без галлюцинаций: extract only explicit source statements. If an assignee is absent use `unknown`; if a deadline is absent use `not_set`; place ambiguity in `unclear`.
+- Speaker attribution / Атрибуция: `SPEAKER_nn` is a silence-gap heuristic, not a verified identity. Preserve labels; never map one to a person or merge speakers unless the transcript explicitly establishes it.
 
-Subcommands:
-- `transcribe SOURCE`
-- `translate TRANSCRIPT`
-- `protocol TRANSCRIPT`
-- `process SOURCE`
+## LLM backends and safety / Бэкенды и безопасность
 
-## Hermes plugin
+Configure every LLM backend with `MEETING_LLM_BASE_URL`, `MEETING_LLM_API_KEY`, and `MEETING_LLM_MODEL`.
 
-Register in Hermes config:
+| Backend | `MEETING_LLM_BASE_URL` |
+|---|---|
+| LM Studio (default) | `http://localhost:1234/v1` |
+| Ollama | `http://localhost:11434/v1` |
+| llama.cpp | `http://localhost:8080/v1` |
+| Cloud OpenAI | `https://api.openai.com/v1` |
 
-```yaml
-plugins:
-  enabled:
-    - meeting-intelligence
-```
-
-Available tools:
-- `meeting_transcribe`
-- `meeting_translate`
-- `meeting_protocol`
-- `meeting_process`
+Cloud is disabled by default / Облако отключено по умолчанию. A non-loopback endpoint requires `allow_cloud=true` for the tool call; do not enable it implicitly.
 
 ## Environment / Переменные окружения
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MEETING_ALLOW_CLOUD` | `false` | Allow external LLM/STT / Разрешить внешний LLM/STT |
-| `MEETING_LLM_BASE_URL` | `http://localhost:1234/v1` | OpenAI-compatible server / OpenAI-совместимый сервер |
-| `MEETING_LLM_API_KEY` | `lm-studio` | API key / Ключ API |
-| `MEETING_LLM_MODEL` | `qwen2.5-7b-instruct` | Default LLM / Модель LLM по умолчанию |
-| `MEETING_MAX_FILE_MB` | `2048` | File size limit / Лимит размера файла |
-| `MEETING_MAX_DURATION_SEC` | `7200` | Audio/video duration limit / Лимит длительности аудио/видео |
-
-## Safety / Безопасность
-
-- Cloud disabled by default; external endpoints blocked unless `--allow-cloud` is set.
-  / Облако отключено по умолчанию; внешние endpoint блокируются, если не указан `--allow-cloud`.
-- Validation enforces `source_quote` grounding; invalid protocols are rejected and saved as `.protocol.rejected.json`.
-  / Валидация проверяет `source_quote`; невалидные протоколы отклоняются и сохраняются как `.protocol.rejected.json`.
-- No secrets are logged; audit metadata is captured for each run.
-  / Секреты не логируются; для каждого запуска сохраняется audit metadata.
-
-## Test / Тестирование
-
-```bash
-pytest -q
-```
-
-## Artifacts / Артефакты
-
-Current wheel: `dist/meeting_intelligence-0.5.2-py3-none-any.whl`
-SHA256: `ae63a3c38dae4813ba848ecc09b4156d4c884012ab282094267a1a9d699caae9`
-
-## License
-
-MIT
+| Variable | Default | Meaning / Назначение |
+|---|---|---|
+| `MEETING_LLM_BASE_URL` | `http://localhost:1234/v1` | OpenAI-compatible LLM endpoint / endpoint LLM. |
+| `MEETING_LLM_API_KEY` | `lm-studio` | LLM API key; use the cloud key for Cloud OpenAI. |
+| `MEETING_LLM_MODEL` | `qwen2.5-7b-instruct` | Default LLM model / модель по умолчанию. |
+| `MEETING_MAX_FILE_MB` | `2048` | Maximum input size / максимальный размер. |
+| `MEETING_MAX_DURATION_SEC` | `7200` | Maximum media duration / максимальная длительность. |
+| `MEETING_TRANSCRIBE_MODEL` | `small` | Default Whisper model / модель Whisper. |
+| `MEETING_TRANSCRIBE_DEVICE` | `cpu` | Default STT device / устройство STT. |
+| `MEETING_TRANSCRIBE_COMPUTE` | `int8` | STT compute type / тип вычислений STT. |
+| `MEETING_TRANSCRIBE_LANG` | `en` | Default source language / язык исходника. |
+| `MEETING_TRANSLATE_BATCH_SIZE` | `8` | Translation batch size / размер пакета перевода. |

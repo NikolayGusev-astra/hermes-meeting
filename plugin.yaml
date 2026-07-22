@@ -1,5 +1,5 @@
 name: meeting-intelligence
-version: 0.5.2
+version: 0.6.0
 description: Local-first meeting intelligence
 entrypoint: meeting_intelligence.plugin:register
 tools:
