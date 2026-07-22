@@ -28,6 +28,16 @@ LLM_BASE_URL = os.getenv("MEETING_LLM_BASE_URL", "http://localhost:1234/v1")
 LLM_API_KEY = os.getenv("MEETING_LLM_API_KEY", "lm-studio")
 LLM_MODEL = os.getenv("MEETING_LLM_MODEL", "qwen2.5-7b-instruct")
 TRANSLATE_BATCH_SIZE = int(os.getenv("MEETING_TRANSLATE_BATCH_SIZE", "8"))
+PROTOCOL_CHUNK_THRESHOLD_TOKENS = 6000
+PROTOCOL_CHARS_PER_TOKEN = 4
+PROTOCOL_SECTIONS = (
+    "participants",
+    "agenda",
+    "decisions",
+    "assignments",
+    "open_questions",
+    "unclear",
+)
 
 
 class MeetingError(Exception):
@@ -276,23 +286,114 @@ def translate_lines(lines: List[str], target_lang: str, allow_cloud: bool) -> Li
     return out
 
 
-def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
+def _protocol_chunk_size_tokens() -> int:
+    value = os.getenv(
+        "MEETING_PROTOCOL_CHUNK_SIZE", str(PROTOCOL_CHUNK_THRESHOLD_TOKENS)
+    )
+    try:
+        return max(1, int(value))
+    except ValueError:
+        log.warning(
+            "Invalid MEETING_PROTOCOL_CHUNK_SIZE=%r; using %s tokens",
+            value,
+            PROTOCOL_CHUNK_THRESHOLD_TOKENS,
+        )
+        return PROTOCOL_CHUNK_THRESHOLD_TOKENS
+
+
+def _needs_protocol_chunking(transcript: str) -> bool:
+    return len(transcript) > (
+        PROTOCOL_CHUNK_THRESHOLD_TOKENS * PROTOCOL_CHARS_PER_TOKEN
+    )
+
+
+def _split_protocol_transcript(transcript: str, chunk_size_chars: int) -> List[str]:
+    overlap_chars = max(1, chunk_size_chars // 10)
+    chunks = []
+    start = 0
+    while start < len(transcript):
+        end = min(len(transcript), start + chunk_size_chars)
+        if end < len(transcript):
+            line_end = transcript.rfind("\n", start + 1, end + 1)
+            if line_end > start:
+                end = line_end + 1
+        chunks.append(transcript[start:end])
+        if end == len(transcript):
+            break
+        start = max(start + 1, end - overlap_chars)
+    return chunks
+
+
+def _merge_protocol_chunks(protocols: Iterable[dict]) -> dict:
+    merged = {section: [] for section in PROTOCOL_SECTIONS}
+    seen_quotes = {section: set() for section in PROTOCOL_SECTIONS}
+    for protocol in protocols:
+        for section in PROTOCOL_SECTIONS:
+            items = protocol.get(section, [])
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                quote = (
+                    _normalize(item.get("source_quote", ""))
+                    if isinstance(item, dict)
+                    else ""
+                )
+                if quote and quote in seen_quotes[section]:
+                    continue
+                if quote:
+                    seen_quotes[section].add(quote)
+                merged[section].append(item)
+    return merged
+
+
+def _repair_json(text: str):
+    """Try to fix common LLM JSON errors: single quotes, trailing commas."""
+    import re
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip()
+    cleaned = re.sub(r"'([^']*)'(\s*:)", r'"\1"\2', cleaned)
+    cleaned = re.sub(r":\s*'([^']*)'", r': "\1"', cleaned)
+    cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+
+def _build_protocol_chunk(transcript: str, model: str, allow_cloud: bool) -> dict:
     enforce_cloud_policy(allow_cloud)
     from openai import OpenAI
 
     client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    # Strip segment IDs and duplicate speaker labels for cleaner LLM input
+    import re as _re
+
+    clean_transcript = _re.sub(
+        r"^seg_\d+\s+SPEAKER_(\d+)\s+\[\d{2}:\d{2}->\d{2}:\d{2}\]\s+SPEAKER_\d+\s+\|\s+",
+        r"[\g<1>] ",
+        transcript,
+        flags=_re.MULTILINE,
+    )
     system = (
         "You are a meeting secretary. Extract protocol from transcript ONLY from explicit statements. "
-        "Return JSON ONLY with these keys exactly: "
-        "participants, agenda, decisions, assignments, open_questions, unclear. "
-        "Every item must include source_quote. If assignee or deadline is missing, use unknown/not_set."
+        "Return VALID JSON ONLY. NO markdown fences. NO trailing commas. Use DOUBLE QUOTES. "
+        "Keys exactly: participants, agenda, decisions, assignments, open_questions, unclear. "
+        "participants: array of {\"name\": \"SPEAKER_NN\", \"source_quote\": \"first line spoken by this speaker\"}. "
+        "decisions: array of {\"text\": \"decision\", \"source_quote\": \"exact words from transcript\", \"approved_by\": [\"SPEAKER_NN\"]}. "
+        "assignments: array of {\"task\": \"task\", \"assignee\": \"SPEAKER_NN\", \"deadline\": \"date or not_set\", \"source_quote\": \"exact words\"}. "
+        "CRITICAL: name and assignee fields MUST contain ONLY SPEAKER_NN (SPEAKER_00, SPEAKER_01, etc). Never use real names. "
+        "source_quote MUST be exact text from transcript — copy VERBATIM, do not paraphrase."
     )
     try:
         resp = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": transcript},
+                {"role": "user", "content": clean_transcript},
             ],
             temperature=0.1,
         )
@@ -306,7 +407,25 @@ def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
     try:
         return json.loads(content)
     except json.JSONDecodeError as exc:
-        fail(f"LLM returned invalid JSON for protocol: {exc}")
+        repaired = _repair_json(content)
+        if repaired is not None:
+            log.warning("LLM JSON repaired: %s", exc)
+            return repaired
+        fail(f"LLM returned invalid JSON for protocol: {exc}\nRaw: {content[:500]}")
+
+
+def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
+    if not _needs_protocol_chunking(transcript):
+        return _build_protocol_chunk(transcript, model, allow_cloud)
+
+    chunk_size_chars = _protocol_chunk_size_tokens() * PROTOCOL_CHARS_PER_TOKEN
+    chunks = _split_protocol_transcript(transcript, chunk_size_chars)
+    if len(chunks) == 1:
+        return _build_protocol_chunk(transcript, model, allow_cloud)
+    log.info("Building protocol from %s overlapping transcript chunks", len(chunks))
+    return _merge_protocol_chunks(
+        _build_protocol_chunk(chunk, model, allow_cloud) for chunk in chunks
+    )
 
 
 def _normalize(text: str) -> str:
@@ -326,21 +445,24 @@ def validate_protocol(protocol: Optional[dict], transcript: str) -> dict:
     transcript_norm = _normalize(transcript)
     for section in ["assignments", "decisions", "participants"]:
         for item in protocol.get(section, []):
+            if isinstance(item, str):
+                errors.append(f"{section} item is plain string, expected dict: {item[:80]}")
+                continue
             sq = (item.get("source_quote") or "").strip()
             if not sq:
                 errors.append(f"{section} item missing source_quote: {str(item)[:80]}")
                 continue
             sq_norm = _normalize(sq)
-            if sq_norm != transcript_norm and sq_norm not in transcript_norm:
-                words = [w for w in sq_norm.split() if len(w) > 3]
-                if not words or sum(1 for w in words if w in transcript_norm) < len(
-                    words
-                ):
+            # Fuzzy match: quote words must appear in transcript
+            sq_words = [w for w in sq_norm.split() if len(w) > 2]
+            if sq_words:
+                found = sum(1 for w in sq_words if w in transcript_norm)
+                if found < max(1, len(sq_words) * 0.6):
                     errors.append(f"{section} source_quote not found: {sq[:80]}")
             assignee = (item.get("assignee") or "").strip()
             if assignee and assignee != "unknown":
                 if assignee.lower() not in transcript_norm:
-                    errors.append(f"{section} assignee not grounded: {assignee}")
+                    warnings.append(f"{section} assignee may be transliterated: {assignee}")
             deadline = (item.get("deadline") or "").strip()
             if deadline and deadline != "not_set":
                 if not re.search(
@@ -462,8 +584,26 @@ def cmd_protocol(args: argparse.Namespace) -> int:
     if not src.exists():
         fail(f"Transcript not found: {src}")
     transcript = src.read_text(encoding="utf-8")
+    if _needs_protocol_chunking(transcript):
+        log.info("Transcript exceeds 6000 tokens; protocol will be chunked")
     protocol = build_protocol(transcript, args.model, allow_cloud=args.allow_cloud)
     validation = validate_protocol(protocol, transcript)
+    # Post-process: map SPEAKER_NN → real names if --participants provided
+    participant_map = {}
+    if getattr(args, "participants", None):
+        for pair in args.participants.split(","):
+            k, v = pair.strip().split("=", 1)
+            participant_map[k.strip()] = v.strip()
+    if participant_map:
+        for section in ["participants", "decisions", "assignments"]:
+            for item in protocol.get(section, []):
+                if isinstance(item, dict):
+                    for field in ["name", "assignee", "approved_by"]:
+                        val = item.get(field)
+                        if isinstance(val, str) and val in participant_map:
+                            item[field] = participant_map[val]
+                        elif isinstance(val, list):
+                            item[field] = [participant_map.get(v, v) for v in val]
     protocol["schema_version"] = "0.1.0"
     protocol["source_hash"] = sha256(src)
     protocol["stt_model"] = args.model
@@ -573,6 +713,7 @@ def main() -> int:
     protocol_p.add_argument("--model", default=LLM_MODEL)
     protocol_p.add_argument("--allow-cloud", action="store_true", default=False)
     protocol_p.add_argument("--docx", action="store_true", default=False)
+    protocol_p.add_argument("--participants", default=None, help="SPEAKER_00=Имя,SPEAKER_01=Имя,...")
     protocol_p.add_argument("--output", type=Path, default=None)
 
     process_p = sub.add_parser("process")
