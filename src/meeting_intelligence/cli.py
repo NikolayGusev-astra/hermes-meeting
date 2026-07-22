@@ -242,7 +242,7 @@ def _clean_whisper_artifacts(transcript: str) -> str:
     for line in transcript.splitlines():
         single_char_tokens = [token for token in line.split() if len(token) == 1]
         if (
-            len(single_char_tokens) >= 10
+            len(single_char_tokens) >= 4
             and len(set(single_char_tokens)) == 1
         ):
             log.warning("Removed repeated-token Whisper artifact line")
@@ -504,6 +504,30 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip().lower()
 
 
+def _participant_map(value: Optional[str]) -> dict[str, str]:
+    if not value:
+        return {}
+    return {
+        speaker.strip(): name.strip()
+        for pair in value.split(",")
+        for speaker, name in [pair.strip().split("=", 1)]
+    }
+
+
+def replace_participant_labels(protocol: dict, participants: Optional[str]) -> None:
+    participant_map = _participant_map(participants)
+    for section in ["participants", "decisions", "assignments"]:
+        for item in protocol.get(section, []):
+            if not isinstance(item, dict):
+                continue
+            for field in ["name", "assignee", "approved_by"]:
+                value = item.get(field)
+                if isinstance(value, str) and value in participant_map:
+                    item[field] = participant_map[value]
+                elif isinstance(value, list):
+                    item[field] = [participant_map.get(entry, entry) for entry in value]
+
+
 def validate_protocol(protocol: Optional[dict], transcript: str) -> dict:
     if not protocol:
         return {
@@ -665,22 +689,7 @@ def cmd_protocol(args: argparse.Namespace) -> int:
             protocol, transcript, args.model, allow_cloud=args.allow_cloud
         )
     validation = validate_protocol(protocol, transcript)
-    # Post-process: map SPEAKER_NN → real names if --participants provided
-    participant_map = {}
-    if getattr(args, "participants", None):
-        for pair in args.participants.split(","):
-            k, v = pair.strip().split("=", 1)
-            participant_map[k.strip()] = v.strip()
-    if participant_map:
-        for section in ["participants", "decisions", "assignments"]:
-            for item in protocol.get(section, []):
-                if isinstance(item, dict):
-                    for field in ["name", "assignee", "approved_by"]:
-                        val = item.get(field)
-                        if isinstance(val, str) and val in participant_map:
-                            item[field] = participant_map[val]
-                        elif isinstance(val, list):
-                            item[field] = [participant_map.get(v, v) for v in val]
+    replace_participant_labels(protocol, getattr(args, "participants", None))
     protocol["schema_version"] = "0.1.0"
     protocol["source_hash"] = sha256(src)
     protocol["stt_model"] = args.model
@@ -740,6 +749,7 @@ def cmd_process(args: argparse.Namespace) -> int:
 
     protocol = build_protocol(transcript, args.llm_model, allow_cloud=args.allow_cloud)
     validation = validate_protocol(protocol, transcript)
+    replace_participant_labels(protocol, getattr(args, "participants", None))
     protocol["quality"] = validation
     protocol["schema_version"] = "0.1.0"
     protocol["source_hash"] = sha256(transcript_path)
@@ -805,6 +815,7 @@ def main() -> int:
     process_p.add_argument("--skip-translate", action="store_true", default=False)
     process_p.add_argument("--docx", action="store_true", default=False)
     process_p.add_argument("--allow-cloud", action="store_true", default=False)
+    process_p.add_argument("--participants", default=None, help="SPEAKER_00=Name,SPEAKER_01=Name,...")
     process_p.add_argument("--output", type=Path, default=None)
 
     args = p.parse_args()
