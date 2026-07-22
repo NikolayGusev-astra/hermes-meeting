@@ -22,8 +22,12 @@ cloud = []
 diarization = [
     "pyannote.audio>=3.1",
 ]
+url = [
+    "yt-dlp",
+]
 all = [
     "pyannote.audio>=3.1",
+    "yt-dlp",
 ]
 dev = [
     "pytest",

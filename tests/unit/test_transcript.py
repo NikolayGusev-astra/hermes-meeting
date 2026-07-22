@@ -3,7 +3,19 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from meeting_intelligence.cli import _agent_mode_enabled, _clean_whisper_artifacts, transcribe_audio
+from meeting_intelligence.cli import (
+    _agent_mode_enabled,
+    _clean_whisper_artifacts,
+    _is_url,
+    transcribe_audio,
+)
+
+
+def test_is_url_recognizes_http_and_https_only():
+    assert _is_url("https://example.com/meeting")
+    assert _is_url("http://example.com/meeting")
+    assert not _is_url("meeting.wav")
+    assert not _is_url("file:///tmp/meeting.wav")
 
 
 def test_agent_mode_is_opt_in(monkeypatch):

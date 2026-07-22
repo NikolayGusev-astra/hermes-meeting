@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from importlib.util import find_spec
 import json
 import logging
 import os
 import re
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -63,9 +67,49 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def is_loopback_url(url: str) -> bool:
-    from urllib.parse import urlparse
+def _is_url(value: str | Path) -> bool:
+    parsed = urlparse(str(value))
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
+
+def _resolve_source(url_or_path: str | Path) -> Path:
+    if not _is_url(url_or_path):
+        return Path(url_or_path)
+    if find_spec("yt_dlp") is None:
+        fail("URL support requires yt-dlp; install meeting-intelligence[url]")
+
+    download_dir = Path(tempfile.mkdtemp(prefix="meeting-intelligence-"))
+    output_template = download_dir / "audio.%(ext)s"
+    command = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "-x",
+        "--audio-format",
+        "wav",
+        "--no-playlist",
+        "--proxy", os.getenv("MEETING_YT_PROXY", ""),
+        "--output",
+        str(output_template),
+        str(url_or_path),
+    ]
+    log.info("Downloading audio from URL")
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=600, check=False
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MeetingError("yt-dlp timed out while downloading audio") from exc
+    if result.returncode != 0:
+        raise MeetingError(f"yt-dlp failed: {result.stderr[-400:]}")
+
+    audio = download_dir / "audio.wav"
+    if not audio.is_file() or audio.stat().st_size == 0:
+        raise MeetingError("yt-dlp did not produce a WAV audio file")
+    return audio
+
+
+def is_loopback_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower()
     return host in {"127.0.0.1", "localhost", "::1", ""}
 
@@ -700,7 +744,7 @@ def _now_iso() -> str:
 
 
 def cmd_transcribe(args: argparse.Namespace) -> int:
-    src = Path(args.source)
+    src = _resolve_source(args.source)
     if not src.exists():
         fail(f"File not found: {src}")
     check_resource_limits(src)
@@ -786,7 +830,7 @@ def cmd_protocol(args: argparse.Namespace) -> int:
 
 def cmd_process(args: argparse.Namespace) -> int:
     """Run the legacy end-to-end pipeline (legacy — prefer agent-driven via SKILL.md)."""
-    src = Path(args.source)
+    src = _resolve_source(args.source)
     if not src.exists():
         fail(f"File not found: {src}")
     check_resource_limits(src)
@@ -853,7 +897,7 @@ def main() -> int:
     sub = p.add_subparsers(dest="command")
 
     transcribe_p = sub.add_parser("transcribe")
-    transcribe_p.add_argument("source", type=Path)
+    transcribe_p.add_argument("source")
     transcribe_p.add_argument("--model", default=TRANSCRIBE_MODEL)
     transcribe_p.add_argument("--language", default=TRANSCRIBE_LANG)
     transcribe_p.add_argument("--device", default=TRANSCRIBE_DEVICE)
@@ -881,7 +925,7 @@ def main() -> int:
     protocol_p.add_argument("--output", type=Path, default=None)
 
     process_p = sub.add_parser("process")
-    process_p.add_argument("source", type=Path)
+    process_p.add_argument("source")
     process_p.add_argument("--stt-model", default=TRANSCRIBE_MODEL)
     process_p.add_argument("--llm-model", default=LLM_MODEL)
     process_p.add_argument("--language", default=TRANSCRIBE_LANG)
