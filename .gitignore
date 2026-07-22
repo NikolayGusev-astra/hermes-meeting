@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+.ruff_cache/
+.pytest_cache/
 dist/
 .eggs/
 temp_test_venv/
