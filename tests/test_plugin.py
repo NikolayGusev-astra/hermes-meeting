@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import sys
 from pathlib import Path
 
@@ -15,12 +16,11 @@ class _Ctx:
     def __init__(self) -> None:
         self.tools = {}
 
-    def register_tool(self, name, description, input_schema, output_schema, handler):
+    def register_tool(self, name, toolset, schema, handler):
         self.tools[name] = dict(
             name=name,
-            description=description,
-            input_schema=input_schema,
-            output_schema=output_schema,
+            toolset=toolset,
+            schema=schema,
             handler=handler,
         )
 
@@ -52,6 +52,11 @@ def test_plugin_registers_expected_tools():
         "meeting_protocol",
         "meeting_process",
     }
+    for name, tool in ctx.tools.items():
+        assert tool["toolset"] == "meeting_intelligence"
+        assert tool["schema"]["name"] == name
+        assert "description" in tool["schema"]
+        assert tool["schema"]["parameters"]["type"] == "object"
 
 
 def test_handler_invokes_exit_code_shape():
@@ -65,10 +70,5 @@ def test_handler_invokes_exit_code_shape():
     ctx = _Ctx()
     mod.register(ctx)
     handler = ctx.tools["meeting_protocol"]["handler"]
-    res = handler(
-        transcript="no real transcript here",
-        model="qwen2.5-7b-instruct",
-        allow_cloud=False,
-        docx=False,
-    )
+    res = json.loads(handler({"transcript": "no real transcript here"}))
     assert "exit_code" in res and "stderr" in res and "stdout" in res

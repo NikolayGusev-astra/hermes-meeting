@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "meeting-intelligence"
-version = "0.5.1"
+version = "0.5.2"
 description = "Local-first meeting intelligence"
 requires-python = ">=3.10"
 dependencies = [

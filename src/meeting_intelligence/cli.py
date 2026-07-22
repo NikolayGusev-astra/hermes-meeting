@@ -167,7 +167,6 @@ def transcribe_audio(
     )
     log.info("Detected language=%s duration=%.1fs", info.language, info.duration)
     segments = []
-    out_lines = []
     for idx, seg in enumerate(segments_iter, 1):
         text = seg.text.strip()
         if not text:
@@ -184,13 +183,13 @@ def transcribe_audio(
         start_sec = int(seg.start % 60)
         end_min = int(seg.end // 60)
         end_sec = int(seg.end % 60)
-        out_lines.append(
-            f"[{start_min:02d}:{start_sec:02d}->{end_min:02d}:{end_sec:02d}] {item['speaker_id']} | {text}"
+        item["timestamp"] = (
+            f"[{start_min:02d}:{start_sec:02d}->{end_min:02d}:{end_sec:02d}]"
         )
     enriched = _silence_speakers(segments)
     final_lines = []
-    for item, line in zip(enriched, out_lines):
-        final_lines.append(f"{item['id']} {item['speaker_id']} {line}")
+    for item in enriched:
+        final_lines.append(f"{item['timestamp']} {item['speaker_id']} | {item['text']}")
     meta = {
         "schema_version": "0.1.0",
         "stt_model": model,
@@ -417,9 +416,9 @@ def write_protocol_docx(protocol: dict, path: Path) -> None:
 
 
 def _now_iso() -> str:
-    return subprocess.check_output(
-        ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], text=True
-    ).strip()
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def cmd_transcribe(args: argparse.Namespace) -> int:
@@ -503,7 +502,7 @@ def cmd_process(args: argparse.Namespace) -> int:
     if audio != src:
         extract_audio(src, audio)
     transcript, transcript_meta = transcribe_audio(
-        audio, args.model, args.language, args.device, args.compute_type
+        audio, args.stt_model, args.language, args.device, args.compute_type
     )
     transcript_path = src.with_suffix(".transcript.txt")
     transcript_path.write_text(transcript, encoding="utf-8")
@@ -521,17 +520,18 @@ def cmd_process(args: argparse.Namespace) -> int:
         translated_path.write_text("\n".join(translated), encoding="utf-8")
         log.info("Saved translation: %s", translated_path)
 
-    protocol = build_protocol(transcript, args.model, allow_cloud=args.allow_cloud)
+    protocol = build_protocol(transcript, args.llm_model, allow_cloud=args.allow_cloud)
     validation = validate_protocol(protocol, transcript)
     protocol["quality"] = validation
     protocol["schema_version"] = "0.1.0"
     protocol["source_hash"] = sha256(transcript_path)
-    protocol["stt_model"] = args.model
-    protocol["llm_model"] = LLM_MODEL
+    protocol["stt_model"] = args.stt_model
+    protocol["llm_model"] = args.llm_model
     protocol["created_at"] = _now_iso()
     protocol["cloud_allowed"] = args.allow_cloud
     protocol["parameters"] = {
-        "model": args.model,
+        "stt_model": args.stt_model,
+        "llm_model": args.llm_model,
         "allow_cloud": args.allow_cloud,
         "target_lang": args.target_lang,
     }
@@ -577,7 +577,8 @@ def main() -> int:
 
     process_p = sub.add_parser("process")
     process_p.add_argument("source", type=Path)
-    process_p.add_argument("--model", default=TRANSCRIBE_MODEL)
+    process_p.add_argument("--stt-model", default=TRANSCRIBE_MODEL)
+    process_p.add_argument("--llm-model", default=LLM_MODEL)
     process_p.add_argument("--language", default=TRANSCRIBE_LANG)
     process_p.add_argument("--device", default=TRANSCRIBE_DEVICE)
     process_p.add_argument("--compute-type", default=TRANSCRIBE_COMPUTE)

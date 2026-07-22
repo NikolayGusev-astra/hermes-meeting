@@ -1,7 +1,7 @@
 ---
 name: meeting-intelligence
 description: "Local-first meeting intelligence: video/audio -> timestamped transcript -> translated transcript -> validated meeting protocol. Portable across macOS, Windows, Linux."
-version: 0.5.1
+version: 0.5.2
 author: Nikolay Gusev
 license: MIT
 platforms: [macos, windows, linux]
@@ -43,7 +43,7 @@ pip install .
 Or install from wheel:
 
 ```bash
-pip install dist/meeting_intelligence-0.5.1-py3-none-any.whl
+pip install dist/meeting_intelligence-0.5.2-py3-none-any.whl
 ```
 
 ## CLI / CLI
@@ -118,8 +118,8 @@ pytest -q
 
 ## Artifacts / Артефакты
 
-Current wheel: `dist/meeting_intelligence-0.5.1-py3-none-any.whl`
-SHA256: `3f15edf29f5c6d3ca9c60937ff3a11215ecf58086eabd1bd8cd9f03530f04dac`
+Current wheel: `dist/meeting_intelligence-0.5.2-py3-none-any.whl`
+SHA256: `ae63a3c38dae4813ba848ecc09b4156d4c884012ab282094267a1a9d699caae9`
 
 ## License
 

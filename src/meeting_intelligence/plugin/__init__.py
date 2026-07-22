@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -16,9 +18,9 @@ from meeting_intelligence.cli import (
 )
 
 
-def _invoke(fn, **kwargs):
+def _invoke(fn: Callable[[argparse.Namespace], int], args: argparse.Namespace) -> dict:
     try:
-        rc = fn(**kwargs)
+        rc = fn(args)
     except SystemExit as exc:
         rc = int(exc.code) if exc.code is not None else 2
     except Exception as exc:
@@ -26,109 +28,98 @@ def _invoke(fn, **kwargs):
     return {"exit_code": int(rc), "stdout": "", "stderr": ""}
 
 
+def _handler(fn: Callable[[argparse.Namespace], int], defaults: dict) -> Callable:
+    def handler(params: dict, **kwargs: Any) -> str:
+        del kwargs
+        args = argparse.Namespace(**(defaults | params))
+        return json.dumps(_invoke(fn, args))
+
+    return handler
+
+
+def _schema(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    return {
+        "name": name,
+        "description": description,
+        "parameters": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        },
+    }
+
+
 def register(ctx: Any) -> None:
     ctx.register_tool(
         name="meeting_transcribe",
-        description="Transcribe audio/video to timestamped transcript",
-        input_schema={
-            "type": "object",
-            "properties": {
+        toolset="meeting_intelligence",
+        schema=_schema(
+            "meeting_transcribe",
+            "Transcribe audio/video to timestamped transcript",
+            {
                 "source": {"type": "string"},
                 "model": {"type": "string", "default": "small"},
                 "language": {"type": "string", "default": "en"},
                 "device": {"type": "string", "default": "cpu", "enum": ["cpu", "cuda"]},
                 "compute_type": {"type": "string", "default": "int8"},
+                "output": {"type": "string"},
             },
-            "required": ["source"],
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "exit_code": {"type": "integer"},
-                "stdout": {"type": "string"},
-                "stderr": {"type": "string"},
-            },
-        },
-        handler=lambda source, model="small", language="en", device="cpu", compute_type="int8": (
-            _invoke(
-                cmd_transcribe,
-                source=Path(source),
-                model=model,
-                language=language,
-                device=device,
-                compute_type=compute_type,
-            )
+            ["source"],
+        ),
+        handler=_handler(
+            cmd_transcribe,
+            {"model": "small", "language": "en", "device": "cpu", "compute_type": "int8", "output": None},
         ),
     )
 
     ctx.register_tool(
         name="meeting_translate",
-        description="Translate timestamped transcript",
-        input_schema={
-            "type": "object",
-            "properties": {
+        toolset="meeting_intelligence",
+        schema=_schema(
+            "meeting_translate",
+            "Translate timestamped transcript",
+            {
                 "transcript": {"type": "string"},
                 "target_lang": {"type": "string", "default": "ru"},
                 "allow_cloud": {"type": "boolean", "default": False},
+                "output": {"type": "string"},
             },
-            "required": ["transcript"],
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "exit_code": {"type": "integer"},
-                "stdout": {"type": "string"},
-                "stderr": {"type": "string"},
-            },
-        },
-        handler=lambda transcript, target_lang="ru", allow_cloud=False: _invoke(
-            cmd_translate,
-            transcript=Path(transcript),
-            target_lang=target_lang,
-            allow_cloud=allow_cloud,
+            ["transcript"],
         ),
+        handler=_handler(cmd_translate, {"target_lang": "ru", "allow_cloud": False, "output": None}),
     )
 
     ctx.register_tool(
         name="meeting_protocol",
-        description="Extract validated meeting protocol from transcript",
-        input_schema={
-            "type": "object",
-            "properties": {
+        toolset="meeting_intelligence",
+        schema=_schema(
+            "meeting_protocol",
+            "Extract validated meeting protocol from transcript",
+            {
                 "transcript": {"type": "string"},
                 "model": {"type": "string", "default": "qwen2.5-7b-instruct"},
                 "allow_cloud": {"type": "boolean", "default": False},
                 "docx": {"type": "boolean", "default": False},
+                "output": {"type": "string"},
             },
-            "required": ["transcript"],
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "exit_code": {"type": "integer"},
-                "stdout": {"type": "string"},
-                "stderr": {"type": "string"},
-            },
-        },
-        handler=lambda transcript, model="qwen2.5-7b-instruct", allow_cloud=False, docx=False: (
-            _invoke(
-                cmd_protocol,
-                transcript=Path(transcript),
-                model=model,
-                allow_cloud=allow_cloud,
-                docx=docx,
-            )
+            ["transcript"],
+        ),
+        handler=_handler(
+            cmd_protocol,
+            {"model": "qwen2.5-7b-instruct", "allow_cloud": False, "docx": False, "output": None},
         ),
     )
 
     ctx.register_tool(
         name="meeting_process",
-        description="Full pipeline: audio -> transcript -> translation -> protocol",
-        input_schema={
-            "type": "object",
-            "properties": {
+        toolset="meeting_intelligence",
+        schema=_schema(
+            "meeting_process",
+            "Full pipeline: audio -> transcript -> translation -> protocol",
+            {
                 "source": {"type": "string"},
-                "model": {"type": "string", "default": "small"},
+                "stt_model": {"type": "string", "default": "small"},
+                "llm_model": {"type": "string", "default": "qwen2.5-7b-instruct"},
                 "language": {"type": "string", "default": "en"},
                 "device": {"type": "string", "default": "cpu", "enum": ["cpu", "cuda"]},
                 "compute_type": {"type": "string", "default": "int8"},
@@ -137,28 +128,20 @@ def register(ctx: Any) -> None:
                 "docx": {"type": "boolean", "default": False},
                 "allow_cloud": {"type": "boolean", "default": False},
             },
-            "required": ["source"],
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "exit_code": {"type": "integer"},
-                "stdout": {"type": "string"},
-                "stderr": {"type": "string"},
+            ["source"],
+        ),
+        handler=_handler(
+            cmd_process,
+            {
+                "stt_model": "small",
+                "llm_model": "qwen2.5-7b-instruct",
+                "language": "en",
+                "device": "cpu",
+                "compute_type": "int8",
+                "target_lang": "ru",
+                "skip_translate": False,
+                "docx": False,
+                "allow_cloud": False,
             },
-        },
-        handler=lambda source, model="small", language="en", device="cpu", compute_type="int8", target_lang="ru", skip_translate=False, docx=False, allow_cloud=False: (
-            _invoke(
-                cmd_process,
-                source=Path(source),
-                model=model,
-                language=language,
-                device=device,
-                compute_type=compute_type,
-                target_lang=target_lang,
-                skip_translate=skip_translate,
-                docx=docx,
-                allow_cloud=allow_cloud,
-            )
         ),
     )

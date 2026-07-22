@@ -33,7 +33,7 @@ def test_editable_install_and_console_script():
             py = venv_dir / "bin" / "python"
         subprocess.run([str(pip), "install", "--quiet", str(root)], **kwargs)
         out = subprocess.run(
-            [str(py), "-m", "meeting", "--help"],
+            [str(py), "-m", "meeting_intelligence", "--help"],
             capture_output=True,
             text=True,
             creationflags=_win_create_no_window(),

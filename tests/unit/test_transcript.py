@@ -32,5 +32,6 @@ def test_transcribe_metadata_shape():
         assert meta["segment_count"] == 1
         assert "SPEAKER_" in out
         assert "[00:00->00:01]" in out
+        assert out.count("SPEAKER_00") == 1
     finally:
         faster_whisper.WhisperModel = original
