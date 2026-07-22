@@ -1,70 +1,154 @@
 ---
 name: meeting-intelligence
-description: "Hermes meeting-intelligence tools for local-first transcription, translation, and evidence-grounded meeting protocols. Use for meeting audio/video or timestamped transcripts when a transcript, translation, protocol, decisions, assignments, or open questions is required."
-version: 0.6.0
+description: >
+  Local-first meeting pipeline: Whisper transcription → Hermes agent analysis → verified protocol.
+  Agent reads the transcript with its own model, enriches with corporate context (Jira/Confluence/Email),
+  and produces a grounded protocol with decisions, assignments, and risks.
+version: 0.7.0
 when_to_use:
-  - "Audio/video -> timestamped transcript; transcript -> translation or protocol."
-  - "Need evidence-grounded decisions, assignments, participants, or open questions."
+  - "User uploads meeting audio/video and needs a protocol with decisions + assignments."
+  - "Transcript exists and needs analysis, enrichment, or corporate cross-reference."
 counter_triggers:
-  - "Do not use for a casual summary of text with no meeting artifact or evidence requirement."
-  - "Do not infer speaker identities, commitments, dates, or decisions absent from the source."
-required_env:
-  - MEETING_LLM_BASE_URL
-  - MEETING_LLM_API_KEY
-  - MEETING_LLM_MODEL
+  - "Do NOT use for casual chat summarization — only structured meeting protocol."
+  - "Do NOT extract items without source_quote grounding."
+required_tools:
+  - meeting_transcribe
+  - meeting_translate (optional)
+optional_mcp:
+  - jira         # create tasks from assignments
+  - confluence   # save/update protocol pages
+  - email        # send protocol to participants
+  - calendar     # verify meeting time / find slots
 ---
 
-# Meeting Intelligence / Аналитика встреч
+# Meeting Intelligence
 
-Install / Установка:
+## Pipeline
 
-```bash
-pip install 'meeting-intelligence[local]'  # local STT/LLM / локальные STT/LLM
-pip install 'meeting-intelligence[cloud]'  # cloud client / облачный клиент
+```
+Audio/Video → meeting_transcribe → transcript.txt → AGENT ANALYSIS → protocol.json
+                                                         │
+                                          ┌──────────────┼──────────────┐
+                                          ▼              ▼              ▼
+                                        Jira          Confluence      Email
+                                      (tasks)         (page)       (send)
 ```
 
-## Tools / Инструменты
+## Tool: meeting_transcribe
 
-All tools return a JSON envelope: `{"exit_code": int, "stdout": string, "stderr": string}`. `exit_code: 0` means success; `3` means the protocol failed quality gates. Outputs are files; paths below are defaults. / Все инструменты возвращают JSON-конверт; результаты сохраняются в файлы.
+Transcribe audio/video to timestamped transcript. Local Whisper, no cloud.
 
-| Tool | Inputs / Вход | Output / Выход |
-|---|---|---|
-| `meeting_transcribe` | `source` (required), `model=small`, `language=en`, `device=cpu|cuda`, `compute_type=int8`, `output?` | `<source>.transcript.txt`; `<source>.transcript.json` with `source_hash`, `stt_model`, `language`, `language_probability`, `no_speech_prob`, `duration`, `segment_count`. Lines: `[start->end] SPEAKER_nn | text`. |
-| `meeting_translate` | `transcript` (required), `target_lang=ru`, `allow_cloud=false`, `output?` | `<transcript>.translated.txt`; preserves timestamps and `SPEAKER_nn` prefixes. |
-| `meeting_protocol` | `transcript` (required), `model=qwen2.5-7b-instruct`, `allow_cloud=false`, `docx=false`, `output?` | Valid: `<transcript>.protocol.json` (optional `.protocol.docx`); invalid: `.protocol.rejected.json`. JSON: `participants`, `agenda`, `decisions`, `assignments`, `open_questions`, `unclear`, metadata, `quality`. |
-| `meeting_process` | `source` (required), `stt_model=small`, `llm_model=qwen2.5-7b-instruct`, `language=en`, `device=cpu|cuda`, `compute_type=int8`, `target_lang=ru`, `skip_translate=false`, `docx=false`, `allow_cloud=false` | Transcript + metadata, optional translation, and validated protocol as above. |
+Input: `source` (required), `model=small`, `language=en`, `device=cpu`
+Output: `<source>.transcript.txt` — lines formatted as `[timestamp] SPEAKER_NN | text`
 
-## Quality gates / Контроль качества
+Post-processing built in:
+- Garbage filter: strips Whisper hallucination runs (5+ single-char tokens)
+- Segment IDs removed for cleaner LLM input
 
-- Require `source_quote` for every participant, decision, and assignment; normalize whitespace and verify that the quote is grounded in the transcript. Missing or ungrounded evidence rejects the protocol.
-- Set `quality.overall_confidence`: `90` when valid without warnings, `70` when warnings exist, `25` when validation errors exist; include `quality.valid`, `errors`, and `warnings`.
-- No hallucination / Без галлюцинаций: extract only explicit source statements. If an assignee is absent use `unknown`; if a deadline is absent use `not_set`; place ambiguity in `unclear`.
-- Speaker attribution / Атрибуция: `SPEAKER_nn` is a silence-gap heuristic, not a verified identity. Preserve labels; never map one to a person or merge speakers unless the transcript explicitly establishes it.
+## Tool: meeting_translate (optional)
 
-## LLM backends and safety / Бэкенды и безопасность
+Translate transcript lines. Requires `--allow-cloud` if using external LLM.
 
-Configure every LLM backend with `MEETING_LLM_BASE_URL`, `MEETING_LLM_API_KEY`, and `MEETING_LLM_MODEL`.
+Input: `transcript` (required), `target_lang=ru`, `allow_cloud=false`
+Output: `<transcript>.translated.txt`
 
-| Backend | `MEETING_LLM_BASE_URL` |
-|---|---|
-| LM Studio (default) | `http://localhost:1234/v1` |
-| Ollama | `http://localhost:11434/v1` |
-| llama.cpp | `http://localhost:8080/v1` |
-| Cloud OpenAI | `https://api.openai.com/v1` |
+---
 
-Cloud is disabled by default / Облако отключено по умолчанию. A non-loopback endpoint requires `allow_cloud=true` for the tool call; do not enable it implicitly.
+## Agent Protocol Extraction Rules
 
-## Environment / Переменные окружения
+When the transcript is ready, the agent MUST follow these rules:
 
-| Variable | Default | Meaning / Назначение |
-|---|---|---|
-| `MEETING_LLM_BASE_URL` | `http://localhost:1234/v1` | OpenAI-compatible LLM endpoint / endpoint LLM. |
-| `MEETING_LLM_API_KEY` | `lm-studio` | LLM API key; use the cloud key for Cloud OpenAI. |
-| `MEETING_LLM_MODEL` | `qwen2.5-7b-instruct` | Default LLM model / модель по умолчанию. |
-| `MEETING_MAX_FILE_MB` | `2048` | Maximum input size / максимальный размер. |
-| `MEETING_MAX_DURATION_SEC` | `7200` | Maximum media duration / максимальная длительность. |
-| `MEETING_TRANSCRIBE_MODEL` | `small` | Default Whisper model / модель Whisper. |
-| `MEETING_TRANSCRIBE_DEVICE` | `cpu` | Default STT device / устройство STT. |
-| `MEETING_TRANSCRIBE_COMPUTE` | `int8` | STT compute type / тип вычислений STT. |
-| `MEETING_TRANSCRIBE_LANG` | `en` | Default source language / язык исходника. |
-| `MEETING_TRANSLATE_BATCH_SIZE` | `8` | Translation batch size / размер пакета перевода. |
+### Phase 1: Read & Understand
+
+1. Read the full transcript file
+2. Identify participants: map SPEAKER_NN to real names using `--participants` flag or ask user via clarify if unknown. Sample quotes help: *«SPEAKER_00 says: "Женя появился, но молчит" — who is this?»*
+3. Note transcription artifacts (Whisper errors, repeated garbage, off-topic rants)
+
+### Phase 2: Extract
+
+Extract from transcript ONLY explicit statements. For each item, include `source_quote` — VERBATIM text from transcript.
+
+**Participants:** `{"name": "string", "role": "string", "source_quote": "first line by this speaker"}`
+
+**Decisions:** `{"text": "decision", "source_quote": "exact words", "approved_by": ["name"]}`
+- A decision = explicitly agreed or approved outcome
+- NOT a decision: suggestion, hypothesis, question, joke, personal opinion
+
+**Assignments:** `{"task": "description", "assignee": "name or unknown", "deadline": "date or not_set", "source_quote": "exact words", "priority": "high|medium|low"}`
+- If assignee not stated → `"unknown"` (never guess)
+- If deadline not stated → `"not_set"` (never invent)
+
+**Open questions:** `{"text": "question", "owner": "name or unknown", "source_quote": "..."}`
+**Risks:** `{"text": "risk", "severity": "high|medium|low", "source_quote": "..."}`
+**Next steps:** `{"action": "...", "who": "name", "when": "date or not_set"}`
+
+### Phase 3: HALLUCINATION PREVENTION (mandatory)
+
+Before finalizing, verify EVERY item:
+
+| Check | Rule |
+|-------|------|
+| Participants exist? | Every name must appear in transcript or be mapped via `--participants`. Never invent. |
+| Decisions grounded? | Every decision must have `source_quote` present in transcript (fuzzy 60% word match OK). |
+| Assignments grounded? | Every task must trace to an explicit statement. No tasks from general discussion. |
+| Assignees grounded? | If name not in transcript → flag as warning. Transliterated names (Ivan→Иван) = warning, not error. |
+| Deadlines real? | If deadline looks fabricated (not in transcript) → flag as warning. |
+| Roles invented? | No job titles unless stated in transcript. |
+| Off-topic filtered? | Rants, jokes, stories ≠ decisions or tasks. |
+
+If ANY critical check fails → set `quality.status: needs_review`, list failures in `quality.warnings`.
+
+### Phase 4: Enrich (MCP, optional)
+
+After protocol extraction, enhance with corporate context:
+
+| MCP Tool | Action |
+|----------|--------|
+| **Jira** | Search for related issues; create tasks for assignments |
+| **Confluence** | Find meeting series page; append protocol |
+| **Email** | Send protocol to participants |
+| **Calendar** | Verify meeting time; find next available slots |
+
+### Phase 5: Output
+
+```json
+{
+  "meeting": {
+    "title": "...",
+    "date": "2026-07-22",
+    "duration": "21:58",
+    "source_type": "transcript",
+    "language": "ru"
+  },
+  "participants": [...],
+  "decisions": [...],
+  "assignments": [...],
+  "open_questions": [...],
+  "risks": [...],
+  "next_steps": [...],
+  "quality": {
+    "status": "valid | needs_review",
+    "errors": [],
+    "warnings": [],
+    "overall_confidence": 0-100,
+    "model_used": "deepseek-v4-pro"
+  }
+}
+```
+
+## Environment
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MEETING_LLM_BASE_URL` | `http://localhost:1234/v1` | LLM endpoint (for translate only) |
+| `MEETING_TRANSCRIBE_MODEL` | `small` | Whisper model |
+| `MEETING_MAX_FILE_MB` | `2048` | Max input size |
+| `MEETING_MAX_DURATION_SEC` | `7200` | Max recording duration |
+
+## Safety
+
+- Cloud disabled by default; `--allow-cloud` required for external endpoints
+- `source_quote` grounding enforced for every decision and assignment
+- No participant names invented; use `--participants` or ask user
+- Whisper garbage filtered before agent analysis
+- Audit metadata captured per run (model, duration, confidence)

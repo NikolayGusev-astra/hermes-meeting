@@ -483,11 +483,11 @@ def _verify_protocol(
         f"Protocol:\n{json.dumps(protocol, ensure_ascii=False)}\n\n"
         f"Transcript (first 3000 chars):\n{transcript_summary}"
     )
-    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    client = OpenAI(base_url=verify_url, api_key=verify_key)
     try:
         content = (
             client.chat.completions.create(
-                model=model,
+                model=verify_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 timeout=60,
