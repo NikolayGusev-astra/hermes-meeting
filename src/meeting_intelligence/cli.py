@@ -252,7 +252,7 @@ def _clean_whisper_artifacts(transcript: str) -> str:
 
 
 _SEGMENT_ID_PREFIX = re.compile(
-    r"^\s*(?:seg(?:ment)?[_ -]?\d+\s*(?:SPEAKER_\d+\s*)?)",
+    r"^\s*(?:\[?(?:seg(?:ment)?[_ -]?\d+)\]?\s*(?:SPEAKER_\d+\s*)?)",
     re.IGNORECASE,
 )
 
