@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from meeting_intelligence.cli import transcribe_audio
+from meeting_intelligence.cli import _clean_whisper_artifacts, transcribe_audio
 
 
 def test_transcribe_metadata_shape():
@@ -35,3 +35,36 @@ def test_transcribe_metadata_shape():
         assert out.count("SPEAKER_00") == 1
     finally:
         faster_whisper.WhisperModel = original
+
+
+def test_transcribe_discards_runs_of_short_hallucination_segments():
+    from unittest.mock import MagicMock
+
+    segments = []
+    for index in range(5):
+        segment = MagicMock()
+        segment.start = float(index)
+        segment.end = float(index + 1)
+        segment.text = "a"
+        segments.append(segment)
+    info = MagicMock(language="en", duration=5.0)
+    model = MagicMock()
+    model.transcribe.return_value = (segments, info)
+    import faster_whisper
+
+    original = faster_whisper.WhisperModel
+    faster_whisper.WhisperModel = lambda *args, **kwargs: model
+    try:
+        audio = Path(tempfile.gettempdir()) / "mi_short_artifacts.wav"
+        audio.write_bytes(b"RIFF")
+        transcript, meta = transcribe_audio(audio, "tiny", "en", "cpu", "int8")
+        assert transcript == ""
+        assert meta["segment_count"] == 0
+    finally:
+        faster_whisper.WhisperModel = original
+
+
+def test_clean_whisper_artifacts_removes_repeated_single_character_line():
+    transcript = "normal line\n" + " ".join(["а"] * 10) + "\nother line"
+
+    assert _clean_whisper_artifacts(transcript) == "normal line\nother line"

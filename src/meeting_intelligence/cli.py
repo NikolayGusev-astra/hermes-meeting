@@ -196,6 +196,28 @@ def transcribe_audio(
         item["timestamp"] = (
             f"[{start_min:02d}:{start_sec:02d}->{end_min:02d}:{end_sec:02d}]"
         )
+    garbage_runs = []
+    run_start = None
+    for index, item in enumerate(segments):
+        if len(item["text"]) <= 2:
+            if run_start is None:
+                run_start = index
+        elif run_start is not None:
+            if index - run_start >= 5:
+                garbage_runs.append((run_start, index))
+            run_start = None
+    if run_start is not None and len(segments) - run_start >= 5:
+        garbage_runs.append((run_start, len(segments)))
+
+    if garbage_runs:
+        garbage_indexes = {
+            index for start, end in garbage_runs for index in range(start, end)
+        }
+        log.warning("Removed %d short Whisper artifact segments", len(garbage_indexes))
+        segments = [
+            item for index, item in enumerate(segments) if index not in garbage_indexes
+        ]
+
     enriched = _silence_speakers(segments)
     final_lines = []
     for item in enriched:
@@ -212,6 +234,21 @@ def transcribe_audio(
         "segment_count": len(enriched),
     }
     return "\n".join(final_lines), meta
+
+
+def _clean_whisper_artifacts(transcript: str) -> str:
+    """Remove Whisper hallucination lines made of repeated one-character tokens."""
+    clean_lines = []
+    for line in transcript.splitlines():
+        single_char_tokens = [token for token in line.split() if len(token) == 1]
+        if (
+            len(single_char_tokens) >= 10
+            and len(set(single_char_tokens)) == 1
+        ):
+            log.warning("Removed repeated-token Whisper artifact line")
+            continue
+        clean_lines.append(line)
+    return "\n".join(clean_lines)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
@@ -428,6 +465,41 @@ def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
     )
 
 
+def _verify_protocol(
+    protocol: dict, transcript: str, model: str, allow_cloud: bool
+) -> dict:
+    enforce_cloud_policy(allow_cloud)
+    from openai import OpenAI
+
+    prompt = (
+        "Verify this protocol. Find: missed decisions, wrong assignees, "
+        "hallucinated participants. Output corrected JSON.\n\n"
+        f"Protocol:\n{json.dumps(protocol, ensure_ascii=False)}\n\n"
+        f"Original transcript:\n{transcript}"
+    )
+    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    try:
+        content = (
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+            )
+            .choices[0]
+            .message.content.strip()
+        )
+    except Exception as exc:
+        _handle_exception(exc)
+    verified = _repair_json(content)
+    if not isinstance(verified, dict):
+        fail("LLM returned invalid JSON for protocol verification")
+    return verified
+
+
+def _protocol_verification_enabled() -> bool:
+    return os.getenv("MEETING_PROTOCOL_VERIFY", "true").lower() != "false"
+
+
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip().lower()
 
@@ -558,6 +630,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     transcript, meta = transcribe_audio(
         audio, args.model, args.language, args.device, args.compute_type
     )
+    transcript = _clean_whisper_artifacts(transcript)
     out = Path(args.output) if args.output else src.with_suffix(".transcript.txt")
     out.write_text(transcript, encoding="utf-8")
     atomic_write_json(
@@ -587,6 +660,10 @@ def cmd_protocol(args: argparse.Namespace) -> int:
     if _needs_protocol_chunking(transcript):
         log.info("Transcript exceeds 6000 tokens; protocol will be chunked")
     protocol = build_protocol(transcript, args.model, allow_cloud=args.allow_cloud)
+    if _protocol_verification_enabled():
+        protocol = _verify_protocol(
+            protocol, transcript, args.model, allow_cloud=args.allow_cloud
+        )
     validation = validate_protocol(protocol, transcript)
     # Post-process: map SPEAKER_NN → real names if --participants provided
     participant_map = {}
@@ -644,6 +721,7 @@ def cmd_process(args: argparse.Namespace) -> int:
     transcript, transcript_meta = transcribe_audio(
         audio, args.stt_model, args.language, args.device, args.compute_type
     )
+    transcript = _clean_whisper_artifacts(transcript)
     transcript_path = src.with_suffix(".transcript.txt")
     transcript_path.write_text(transcript, encoding="utf-8")
     atomic_write_json(
