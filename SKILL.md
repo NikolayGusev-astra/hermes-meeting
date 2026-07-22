@@ -108,9 +108,11 @@ Before finalizing, verify EVERY item:
 
 If ANY critical check fails → set `quality.status: needs_review`, list failures in `quality.warnings`.
 
-### Phase 4: Enrich (MCP, optional)
+### Phase 4: Enrich (MCP — OPT-IN ONLY)
 
-After protocol extraction, enhance with corporate context:
+**CRITICAL: MCP enrichment is OFF by default.** The agent MUST NOT search Jira, Confluence, email, or calendar unless the user explicitly requests it. A random meeting video is NOT a license to rummage through corporate data.
+
+When the user explicitly asks (e.g. "создай задачи в Jira", "проверь календарь", "сохрани в Confluence"), the agent MAY:
 
 | MCP Tool | Action |
 |----------|--------|
