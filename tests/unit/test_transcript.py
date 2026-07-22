@@ -3,7 +3,14 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from meeting_intelligence.cli import _clean_whisper_artifacts, transcribe_audio
+from meeting_intelligence.cli import _agent_mode_enabled, _clean_whisper_artifacts, transcribe_audio
+
+
+def test_agent_mode_is_opt_in(monkeypatch):
+    monkeypatch.delenv("MEETING_AGENT_MODE", raising=False)
+    assert _agent_mode_enabled() is False
+    monkeypatch.setenv("MEETING_AGENT_MODE", "true")
+    assert _agent_mode_enabled() is True
 
 
 def test_transcribe_metadata_shape():

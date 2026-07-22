@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import sys
 from pathlib import Path
@@ -11,6 +13,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from meeting_intelligence.cli import (
+    cmd_agent_transcript,
     cmd_process,
     cmd_protocol,
     cmd_transcribe,
@@ -19,13 +22,16 @@ from meeting_intelligence.cli import (
 
 
 def _invoke(fn: Callable[[argparse.Namespace], int], args: argparse.Namespace) -> dict:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
     try:
-        rc = fn(args)
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            rc = fn(args)
     except SystemExit as exc:
         rc = int(exc.code) if exc.code is not None else 2
     except Exception as exc:
-        return {"exit_code": 2, "stdout": "", "stderr": str(exc)}
-    return {"exit_code": int(rc), "stdout": "", "stderr": ""}
+        return {"exit_code": 2, "stdout": stdout.getvalue(), "stderr": str(exc)}
+    return {"exit_code": int(rc), "stdout": stdout.getvalue(), "stderr": stderr.getvalue()}
 
 
 def _handler(fn: Callable[[argparse.Namespace], int], defaults: dict) -> Callable:
@@ -87,6 +93,18 @@ def register(ctx: Any) -> None:
             ["transcript"],
         ),
         handler=_handler(cmd_translate, {"target_lang": "ru", "allow_cloud": False, "output": None}),
+    )
+
+    ctx.register_tool(
+        name="meeting_agent_transcript",
+        toolset="meeting_intelligence",
+        schema=_schema(
+            "meeting_agent_transcript",
+            "Clean a transcript into JSON for agent analysis without calling an LLM",
+            {"transcript": {"type": "string"}},
+            ["transcript"],
+        ),
+        handler=_handler(cmd_agent_transcript, {}),
     )
 
     ctx.register_tool(

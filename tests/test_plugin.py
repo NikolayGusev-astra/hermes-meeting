@@ -49,6 +49,7 @@ def test_plugin_registers_expected_tools():
     assert set(ctx.tools) == {
         "meeting_transcribe",
         "meeting_translate",
+        "meeting_agent_transcript",
         "meeting_protocol",
         "meeting_process",
     }
@@ -72,3 +73,22 @@ def test_handler_invokes_exit_code_shape():
     handler = ctx.tools["meeting_protocol"]["handler"]
     res = json.loads(handler({"transcript": "no real transcript here"}))
     assert "exit_code" in res and "stderr" in res and "stdout" in res
+
+
+def test_agent_transcript_handler_returns_cleaned_payload(tmp_path):
+    sys.path.insert(0, str(PROJECT / "src"))
+    spec = importlib.util.spec_from_file_location(
+        "meeting_intelligence.plugin",
+        PROJECT / "src/meeting_intelligence/plugin/__init__.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    transcript = tmp_path / "meeting.txt"
+    transcript.write_text("[seg_0001] hello", encoding="utf-8")
+    ctx = _Ctx()
+    mod.register(ctx)
+
+    result = json.loads(ctx.tools["meeting_agent_transcript"]["handler"]({"transcript": str(transcript)}))
+
+    assert result["exit_code"] == 0
+    assert json.loads(result["stdout"])["transcript"] == "hello"

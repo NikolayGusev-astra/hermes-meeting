@@ -137,7 +137,7 @@ pytest -q
 
 ## Artifacts / Артефакты
 
-Current wheel: `dist/meeting_intelligence-0.6.0-py3-none-any.whl`
+Current wheel: `dist/meeting_intelligence-0.7.0-py3-none-any.whl`
 SHA256: `5eb34667f0185369bfc48f8b8067f0424c4acfa5c1994ff2d37e7739ca1a5953`
 
 ## License

@@ -1,9 +1,10 @@
 name: meeting-intelligence
-version: 0.6.0
+version: 0.7.0
 description: Local-first meeting intelligence
 entrypoint: meeting_intelligence.plugin:register
 tools:
   - meeting_transcribe
   - meeting_translate
+  - meeting_agent_transcript
   - meeting_protocol
   - meeting_process

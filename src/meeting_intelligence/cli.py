@@ -251,6 +251,53 @@ def _clean_whisper_artifacts(transcript: str) -> str:
     return "\n".join(clean_lines)
 
 
+_SEGMENT_ID_PREFIX = re.compile(
+    r"^\s*(?:\[(?:seg(?:ment)?[_ -]?\d+)\]|(?:seg(?:ment)?[_ -]?\d+)\s*[:|])\s*",
+    re.IGNORECASE,
+)
+
+
+def _agent_mode_enabled() -> bool:
+    return os.getenv("MEETING_AGENT_MODE", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def prepare_agent_transcript(transcript: str, source: Path) -> dict[str, Any]:
+    """Build the LLM-free, cleaned transcript payload consumed by meeting agents."""
+    source_lines = transcript.splitlines()
+    without_artifacts = _clean_whisper_artifacts(transcript).splitlines()
+    cleaned_lines = []
+    segment_ids_stripped = 0
+    for line in without_artifacts:
+        cleaned = _SEGMENT_ID_PREFIX.sub("", line).strip()
+        if cleaned != line.strip():
+            segment_ids_stripped += 1
+        if cleaned:
+            cleaned_lines.append(cleaned)
+    cleaned_transcript = "\n".join(cleaned_lines)
+    return {
+        "schema_version": "0.7.0",
+        "transcript": cleaned_transcript,
+        "metadata": {
+            "source": str(source),
+            "source_hash": sha256(source),
+            "input_line_count": len(source_lines),
+            "output_line_count": len(cleaned_lines),
+            "garbage_lines_removed": len(source_lines) - len(without_artifacts),
+            "segment_ids_stripped": segment_ids_stripped,
+            "llm_called": False,
+        },
+    }
+
+
+def cmd_agent_transcript(args: argparse.Namespace) -> int:
+    """Emit a cleaned transcript JSON payload for agent consumption without an LLM call."""
+    src = Path(args.transcript)
+    if not src.exists():
+        fail(f"Transcript not found: {src}")
+    print(json.dumps(prepare_agent_transcript(src.read_text(encoding="utf-8"), src)))
+    return 0
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
 def _translate_one(client: Any, text: str, target_lang: str) -> str:
     prompt = f"Translate to {target_lang}. Keep names/codes/technical terms unchanged. Output ONLY translation, no extra text.\n\n{text}"
@@ -474,6 +521,9 @@ def _verify_protocol(
     enforce_cloud_policy(allow_cloud)
     from openai import OpenAI
 
+    verify_url = os.getenv("MEETING_VERIFY_BASE_URL", LLM_BASE_URL)
+    verify_key = os.getenv("MEETING_VERIFY_API_KEY", LLM_API_KEY)
+    verify_model = os.getenv("MEETING_VERIFY_MODEL", model)
     # Use first 3000 chars of transcript as summary to avoid context overflow
     transcript_summary = transcript[:3000]
     prompt = (
@@ -671,6 +721,8 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         out.with_suffix(".transcript.json"), {"source_hash": sha256(src), **meta}
     )
     log.info("Saved transcript: %s", out)
+    if _agent_mode_enabled():
+        print(json.dumps(prepare_agent_transcript(transcript, out)))
     return 0
 
 
@@ -687,6 +739,7 @@ def cmd_translate(args: argparse.Namespace) -> int:
 
 
 def cmd_protocol(args: argparse.Namespace) -> int:
+    """Build a protocol with the legacy pipeline (legacy — prefer agent-driven via SKILL.md)."""
     src = Path(args.transcript)
     if not src.exists():
         fail(f"Transcript not found: {src}")
@@ -732,6 +785,7 @@ def cmd_protocol(args: argparse.Namespace) -> int:
 
 
 def cmd_process(args: argparse.Namespace) -> int:
+    """Run the legacy end-to-end pipeline (legacy — prefer agent-driven via SKILL.md)."""
     src = Path(args.source)
     if not src.exists():
         fail(f"File not found: {src}")
@@ -812,6 +866,12 @@ def main() -> int:
     translate_p.add_argument("--allow-cloud", action="store_true", default=False)
     translate_p.add_argument("--output", type=Path, default=None)
 
+    agent_transcript_p = sub.add_parser(
+        "agent-transcript",
+        help="Emit a cleaned transcript JSON payload for agent consumption",
+    )
+    agent_transcript_p.add_argument("transcript", type=Path)
+
     protocol_p = sub.add_parser("protocol")
     protocol_p.add_argument("transcript", type=Path)
     protocol_p.add_argument("--model", default=LLM_MODEL)
@@ -844,6 +904,8 @@ def main() -> int:
             return cmd_transcribe(args)
         if args.command == "translate":
             return cmd_translate(args)
+        if args.command == "agent-transcript":
+            return cmd_agent_transcript(args)
         if args.command == "protocol":
             return cmd_protocol(args)
         if args.command == "process":

@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,27 @@ def test_transcribe_help():
 def test_translate_help():
     rc = run(["translate", "--help"])
     assert rc.returncode == 0
+
+
+def test_agent_transcript_outputs_cleaned_json(tmp_path):
+    transcript = tmp_path / "meeting.txt"
+    transcript.write_text(
+        "[seg_0001] [00:00->00:01] SPEAKER_00 | Hello\n"
+        + " ".join(["a"] * 5)
+        + "\nsegment_0002: [00:01->00:02] SPEAKER_01 | Goodbye\n",
+        encoding="utf-8",
+    )
+
+    rc = run(["agent-transcript", str(transcript)])
+
+    assert rc.returncode == 0
+    payload = json.loads(rc.stdout)
+    assert payload["transcript"] == (
+        "[00:00->00:01] SPEAKER_00 | Hello\n[00:01->00:02] SPEAKER_01 | Goodbye"
+    )
+    assert payload["metadata"]["garbage_lines_removed"] == 1
+    assert payload["metadata"]["segment_ids_stripped"] == 2
+    assert payload["metadata"]["llm_called"] is False
 
 
 def test_protocol_help():

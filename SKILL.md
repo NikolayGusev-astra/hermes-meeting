@@ -13,6 +13,7 @@ counter_triggers:
   - "Do NOT extract items without source_quote grounding."
 required_tools:
   - meeting_transcribe
+  - meeting_agent_transcript
   - meeting_translate (optional)
 optional_mcp:
   - jira         # create tasks from assignments
@@ -26,7 +27,7 @@ optional_mcp:
 ## Pipeline
 
 ```
-Audio/Video → meeting_transcribe → transcript.txt → AGENT ANALYSIS → protocol.json
+Audio/Video → meeting_transcribe → transcript.txt → meeting_agent_transcript → AGENT ANALYSIS → protocol.json
                                                          │
                                           ┌──────────────┼──────────────┐
                                           ▼              ▼              ▼
@@ -44,6 +45,15 @@ Output: `<source>.transcript.txt` — lines formatted as `[timestamp] SPEAKER_NN
 Post-processing built in:
 - Garbage filter: strips Whisper hallucination runs (5+ single-char tokens)
 - Segment IDs removed for cleaner LLM input
+
+## Tool: meeting_agent_transcript
+
+Clean a saved transcript for agent analysis. This is local preprocessing only and never calls an LLM.
+
+Input: `transcript` (required)
+Output: JSON on stdout with cleaned transcript text and source, hash, line-count, garbage-filter, and segment-ID metadata.
+
+Set `MEETING_AGENT_MODE=true` to have `meeting transcribe` print this same JSON payload after it saves its normal transcript files.
 
 ## Tool: meeting_translate (optional)
 
@@ -141,6 +151,7 @@ After protocol extraction, enhance with corporate context:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MEETING_LLM_BASE_URL` | `http://localhost:1234/v1` | LLM endpoint (for translate only) |
+| `MEETING_AGENT_MODE` | `false` | Print agent transcript JSON after transcription |
 | `MEETING_TRANSCRIBE_MODEL` | `small` | Whisper model |
 | `MEETING_MAX_FILE_MB` | `2048` | Max input size |
 | `MEETING_MAX_DURATION_SEC` | `7200` | Max recording duration |
