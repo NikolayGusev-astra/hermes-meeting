@@ -1,4 +1,5 @@
 """Hermes plugin registration for meeting intelligence tools."""
+
 from __future__ import annotations
 
 import sys
@@ -48,13 +49,15 @@ def register(ctx: Any) -> None:
                 "stderr": {"type": "string"},
             },
         },
-        handler=lambda source, model="small", language="en", device="cpu", compute_type="int8": _invoke(
-            cmd_transcribe,
-            source=Path(source),
-            model=model,
-            language=language,
-            device=device,
-            compute_type=compute_type,
+        handler=lambda source, model="small", language="en", device="cpu", compute_type="int8": (
+            _invoke(
+                cmd_transcribe,
+                source=Path(source),
+                model=model,
+                language=language,
+                device=device,
+                compute_type=compute_type,
+            )
         ),
     )
 
@@ -107,12 +110,14 @@ def register(ctx: Any) -> None:
                 "stderr": {"type": "string"},
             },
         },
-        handler=lambda transcript, model="qwen2.5-7b-instruct", allow_cloud=False, docx=False: _invoke(
-            cmd_protocol,
-            transcript=Path(transcript),
-            model=model,
-            allow_cloud=allow_cloud,
-            docx=docx,
+        handler=lambda transcript, model="qwen2.5-7b-instruct", allow_cloud=False, docx=False: (
+            _invoke(
+                cmd_protocol,
+                transcript=Path(transcript),
+                model=model,
+                allow_cloud=allow_cloud,
+                docx=docx,
+            )
         ),
     )
 
@@ -142,16 +147,18 @@ def register(ctx: Any) -> None:
                 "stderr": {"type": "string"},
             },
         },
-        handler=lambda source, model="small", language="en", device="cpu", compute_type="int8", target_lang="ru", skip_translate=False, docx=False, allow_cloud=False: _invoke(
-            cmd_process,
-            source=Path(source),
-            model=model,
-            language=language,
-            device=device,
-            compute_type=compute_type,
-            target_lang=target_lang,
-            skip_translate=skip_translate,
-            docx=docx,
-            allow_cloud=allow_cloud,
+        handler=lambda source, model="small", language="en", device="cpu", compute_type="int8", target_lang="ru", skip_translate=False, docx=False, allow_cloud=False: (
+            _invoke(
+                cmd_process,
+                source=Path(source),
+                model=model,
+                language=language,
+                device=device,
+                compute_type=compute_type,
+                target_lang=target_lang,
+                skip_translate=skip_translate,
+                docx=docx,
+                allow_cloud=allow_cloud,
+            )
         ),
     )

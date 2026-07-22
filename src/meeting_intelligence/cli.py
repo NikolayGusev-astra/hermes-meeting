@@ -8,13 +8,14 @@ import logging
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple
 
-from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 log = logging.getLogger("meeting")
 
 MAX_FILE_MB = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
@@ -54,6 +55,7 @@ def sha256(path: Path) -> str:
 
 def is_loopback_url(url: str) -> bool:
     from urllib.parse import urlparse
+
     host = (urlparse(url).hostname or "").lower()
     return host in {"127.0.0.1", "localhost", "::1", ""}
 
@@ -86,7 +88,12 @@ def _probe_duration(path: Path) -> float:
         raise MeetingError(f"Duration probe failed: {exc}") from exc
 
 
-def check_resource_limits(path: Path, *, max_file_mb: Optional[int] = None, max_duration_sec: Optional[int] = None) -> None:
+def check_resource_limits(
+    path: Path,
+    *,
+    max_file_mb: Optional[int] = None,
+    max_duration_sec: Optional[int] = None,
+) -> None:
     size_mb = path.stat().st_size / (1024 * 1024)
     if max_file_mb is None:
         max_file_mb = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
@@ -102,8 +109,17 @@ def check_resource_limits(path: Path, *, max_file_mb: Optional[int] = None, max_
 def extract_audio(src: Path, dst: Path) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "ffmpeg", "-y", "-i", str(src),
-        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(src),
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
         str(dst),
     ]
     log.info("Extracting audio -> %s", dst)
@@ -130,9 +146,17 @@ def _silence_speakers(segments, silence_gap: float = 1.5):
     return out
 
 
-def transcribe_audio(audio: Path, model: str, language: Optional[str], device: str, compute_type: str) -> Tuple[str, dict]:
+def transcribe_audio(
+    audio: Path, model: str, language: Optional[str], device: str, compute_type: str
+) -> Tuple[str, dict]:
     from faster_whisper import WhisperModel
-    log.info("Loading whisper model=%s device=%s compute_type=%s", model, device, compute_type)
+
+    log.info(
+        "Loading whisper model=%s device=%s compute_type=%s",
+        model,
+        device,
+        compute_type,
+    )
     m = WhisperModel(model, device=device, compute_type=compute_type)
     segments_iter, info = m.transcribe(
         str(audio),
@@ -153,14 +177,16 @@ def transcribe_audio(audio: Path, model: str, language: Optional[str], device: s
             "start": float(seg.start),
             "end": float(seg.end),
             "text": text,
-            "speaker_id": f"SPEAKER_00",
+            "speaker_id": "SPEAKER_00",
         }
         segments.append(item)
         start_min = int(seg.start // 60)
         start_sec = int(seg.start % 60)
         end_min = int(seg.end // 60)
         end_sec = int(seg.end % 60)
-        out_lines.append(f"[{start_min:02d}:{start_sec:02d}->{end_min:02d}:{end_sec:02d}] {item['speaker_id']} | {text}")
+        out_lines.append(
+            f"[{start_min:02d}:{start_sec:02d}->{end_min:02d}:{end_sec:02d}] {item['speaker_id']} | {text}"
+        )
     enriched = _silence_speakers(segments)
     final_lines = []
     for item, line in zip(enriched, out_lines):
@@ -169,7 +195,9 @@ def transcribe_audio(audio: Path, model: str, language: Optional[str], device: s
         "schema_version": "0.1.0",
         "stt_model": model,
         "language": info.language,
-        "language_probability": float(getattr(info, "language_probability", 0.0) or 0.0),
+        "language_probability": float(
+            getattr(info, "language_probability", 0.0) or 0.0
+        ),
         "no_speech_prob": float(getattr(info, "no_speech_prob", 0.0) or 0.0),
         "duration": float(info.duration),
         "segment_count": len(enriched),
@@ -179,14 +207,16 @@ def transcribe_audio(audio: Path, model: str, language: Optional[str], device: s
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
 def _translate_one(client: Any, text: str, target_lang: str) -> str:
-    prompt = (
-        f"Translate to {target_lang}. Keep names/codes/technical terms unchanged. Output ONLY translation, no extra text.\n\n{text}"
+    prompt = f"Translate to {target_lang}. Keep names/codes/technical terms unchanged. Output ONLY translation, no extra text.\n\n{text}"
+    return (
+        client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        .choices[0]
+        .message.content.strip()
     )
-    return client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-    ).choices[0].message.content.strip()
 
 
 def _chunked(seq: List[str], size: int) -> Iterable[List[str]]:
@@ -199,10 +229,13 @@ def translate_lines(lines: List[str], target_lang: str, allow_cloud: bool) -> Li
     if not lines:
         return []
     from openai import OpenAI
+
     client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
     out: List[str] = []
     failed = 0
-    head_pat = re.compile(r"^\[(\d{2}:\d{2})->(\d{2}:\d{2})\]\s+(SPEAKER_\d+)\s+\|\s+(.*)$")
+    head_pat = re.compile(
+        r"^\[(\d{2}:\d{2})->(\d{2}:\d{2})\]\s+(SPEAKER_\d+)\s+\|\s+(.*)$"
+    )
     chunk_buf = []
     prefix_buf = []
     for line in lines:
@@ -219,7 +252,10 @@ def translate_lines(lines: List[str], target_lang: str, allow_cloud: bool) -> Li
                 parts = translated.splitlines()
                 if len(parts) != len(chunk_buf):
                     raise ValueError("Translator returned wrong line count")
-                out.extend(f"{p}{part}" for p, part in zip(prefix_buf[-len(chunk_buf):], parts))
+                out.extend(
+                    f"{p}{part}"
+                    for p, part in zip(prefix_buf[-len(chunk_buf) :], parts)
+                )
             except Exception as exc:
                 failed += len(chunk_buf)
                 log.warning("Batch translate failed: %s", exc)
@@ -244,6 +280,7 @@ def translate_lines(lines: List[str], target_lang: str, allow_cloud: bool) -> Li
 def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
     enforce_cloud_policy(allow_cloud)
     from openai import OpenAI
+
     client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
     system = (
         "You are a meeting secretary. Extract protocol from transcript ONLY from explicit statements. "
@@ -254,7 +291,10 @@ def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
     try:
         resp = client.chat.completions.create(
             model=model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": transcript}],
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": transcript},
+            ],
             temperature=0.1,
         )
     except Exception as exc:
@@ -276,7 +316,12 @@ def _normalize(text: str) -> str:
 
 def validate_protocol(protocol: Optional[dict], transcript: str) -> dict:
     if not protocol:
-        return {"valid": False, "errors": ["protocol is empty"], "warnings": [], "overall_confidence": 0}
+        return {
+            "valid": False,
+            "errors": ["protocol is empty"],
+            "warnings": [],
+            "overall_confidence": 0,
+        }
     errors: List[str] = []
     warnings: List[str] = []
     transcript_norm = _normalize(transcript)
@@ -289,7 +334,9 @@ def validate_protocol(protocol: Optional[dict], transcript: str) -> dict:
             sq_norm = _normalize(sq)
             if sq_norm != transcript_norm and sq_norm not in transcript_norm:
                 words = [w for w in sq_norm.split() if len(w) > 3]
-                if not words or sum(1 for w in words if w in transcript_norm) < len(words):
+                if not words or sum(1 for w in words if w in transcript_norm) < len(
+                    words
+                ):
                     errors.append(f"{section} source_quote not found: {sq[:80]}")
             assignee = (item.get("assignee") or "").strip()
             if assignee and assignee != "unknown":
@@ -329,6 +376,7 @@ def write_protocol_docx(protocol: dict, path: Path) -> None:
         return
     from docx import Document
     from docx.shared import Pt, Cm
+
     doc = Document()
     for section in doc.sections:
         section.top_margin = Cm(2)
@@ -358,13 +406,20 @@ def write_protocol_docx(protocol: dict, path: Path) -> None:
             continue
         doc.add_heading(section_name.replace("_", " ").title(), level=1)
         for idx, item in enumerate(items, 1):
-            text = item.get("text") or item.get("task") or item.get("question") or str(item)
+            text = (
+                item.get("text")
+                or item.get("task")
+                or item.get("question")
+                or str(item)
+            )
             doc.add_paragraph(f"{idx}. {text}")
     doc.save(path)
 
 
 def _now_iso() -> str:
-    return subprocess.check_output(["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], text=True).strip()
+    return subprocess.check_output(
+        ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], text=True
+    ).strip()
 
 
 def cmd_transcribe(args: argparse.Namespace) -> int:
@@ -372,13 +427,21 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     if not src.exists():
         fail(f"File not found: {src}")
     check_resource_limits(src)
-    audio = src if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"} else src.with_suffix(".wav")
+    audio = (
+        src
+        if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"}
+        else src.with_suffix(".wav")
+    )
     if audio != src:
         extract_audio(src, audio)
-    transcript, meta = transcribe_audio(audio, args.model, args.language, args.device, args.compute_type)
+    transcript, meta = transcribe_audio(
+        audio, args.model, args.language, args.device, args.compute_type
+    )
     out = Path(args.output) if args.output else src.with_suffix(".transcript.txt")
     out.write_text(transcript, encoding="utf-8")
-    atomic_write_json(out.with_suffix(".transcript.json"), {"source_hash": sha256(src), **meta})
+    atomic_write_json(
+        out.with_suffix(".transcript.json"), {"source_hash": sha256(src), **meta}
+    )
     log.info("Saved transcript: %s", out)
     return 0
 
@@ -432,17 +495,28 @@ def cmd_process(args: argparse.Namespace) -> int:
     if not src.exists():
         fail(f"File not found: {src}")
     check_resource_limits(src)
-    audio = src if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"} else src.with_suffix(".wav")
+    audio = (
+        src
+        if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"}
+        else src.with_suffix(".wav")
+    )
     if audio != src:
         extract_audio(src, audio)
-    transcript, transcript_meta = transcribe_audio(audio, args.model, args.language, args.device, args.compute_type)
+    transcript, transcript_meta = transcribe_audio(
+        audio, args.model, args.language, args.device, args.compute_type
+    )
     transcript_path = src.with_suffix(".transcript.txt")
     transcript_path.write_text(transcript, encoding="utf-8")
-    atomic_write_json(transcript_path.with_suffix(".transcript.json"), {"source_hash": sha256(src), **transcript_meta})
+    atomic_write_json(
+        transcript_path.with_suffix(".transcript.json"),
+        {"source_hash": sha256(src), **transcript_meta},
+    )
     log.info("Saved transcript: %s", transcript_path)
 
     if not args.skip_translate:
-        translated = translate_lines(transcript.splitlines(), args.target_lang, allow_cloud=args.allow_cloud)
+        translated = translate_lines(
+            transcript.splitlines(), args.target_lang, allow_cloud=args.allow_cloud
+        )
         translated_path = src.with_suffix(".translated.txt")
         translated_path.write_text("\n".join(translated), encoding="utf-8")
         log.info("Saved translation: %s", translated_path)

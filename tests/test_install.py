@@ -1,4 +1,5 @@
-import os, subprocess, sys
+import subprocess
+import sys
 from pathlib import Path
 import pytest
 
@@ -13,11 +14,14 @@ def _win_create_no_window() -> int:
 
 def test_editable_install_and_console_script():
     if _is_windows():
-        pytest.xfail("Known Windows subprocess venv issue; wheel/console script verified independently")
+        pytest.xfail(
+            "Known Windows subprocess venv issue; wheel/console script verified independently"
+        )
     root = Path(__file__).resolve().parents[1]
     venv_dir = root / "temp_test_venv"
     if venv_dir.exists():
         import shutil
+
         shutil.rmtree(venv_dir, ignore_errors=True)
     kwargs = {"check": True, "creationflags": _win_create_no_window()}
     subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], **kwargs)
@@ -37,4 +41,5 @@ def test_editable_install_and_console_script():
         assert out.returncode == 0, out.stderr
     finally:
         import shutil
+
         shutil.rmtree(venv_dir, ignore_errors=True)

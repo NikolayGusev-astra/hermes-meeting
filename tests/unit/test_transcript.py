@@ -1,11 +1,14 @@
-import sys, tempfile
+import sys
+import tempfile
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from meeting_intelligence.cli import transcribe_audio
 
 
 def test_transcribe_metadata_shape():
     from unittest.mock import MagicMock
+
     segment = MagicMock()
     segment.start = 0.0
     segment.end = 1.0
@@ -18,6 +21,7 @@ def test_transcribe_metadata_shape():
     model = MagicMock()
     model.transcribe.return_value = ([segment], info)
     import faster_whisper
+
     original = faster_whisper.WhisperModel
     faster_whisper.WhisperModel = lambda *a, **k: model
     try:

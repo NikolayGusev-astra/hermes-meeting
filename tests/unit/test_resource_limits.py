@@ -1,13 +1,22 @@
 import importlib.util
-import os, sys, tempfile, wave
+import os
+import sys
+import tempfile
+import wave
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+
 def _load_cli():
-    spec = importlib.util.spec_from_file_location("meeting_intelligence.cli", Path(__file__).resolve().parents[2] / "src" / "meeting_intelligence" / "cli.py")
+    spec = importlib.util.spec_from_file_location(
+        "meeting_intelligence.cli",
+        Path(__file__).resolve().parents[2] / "src" / "meeting_intelligence" / "cli.py",
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
 
 def test_small_wav_passes():
     mod = _load_cli()
@@ -23,6 +32,7 @@ def test_small_wav_passes():
     finally:
         os.unlink(p.name)
 
+
 def test_too_long_wav_fails(monkeypatch):
     mod = _load_cli()
     p = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -35,7 +45,9 @@ def test_too_long_wav_fails(monkeypatch):
     try:
         duration = float(wave.open(p.name).getnframes() / 16000)
         try:
-            mod.check_resource_limits(Path(p.name), max_duration_sec=max(0.1, duration - 0.5))
+            mod.check_resource_limits(
+                Path(p.name), max_duration_sec=max(0.1, duration - 0.5)
+            )
         except SystemExit:
             pass
         else:

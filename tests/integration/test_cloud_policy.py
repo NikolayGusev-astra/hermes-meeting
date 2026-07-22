@@ -1,5 +1,7 @@
-import os, sys
+import os
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from meeting_intelligence.cli import enforce_cloud_policy
 
