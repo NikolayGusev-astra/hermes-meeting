@@ -4,26 +4,37 @@ Local-first meeting processing: audio/video → timestamped transcript → trans
 
 Optional Hermes plugin integration via `meeting-intelligence`.
 
+## Requirements / Требования
+
+- Python 3.10 or newer
+- `ffmpeg` installed on the system and available on `PATH`
+- At least 8 GB RAM
+- One LLM backend: LM Studio, Ollama, llama.cpp, or a cloud API key
+
 ## Install / Установка
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-pip install .
+pip install meeting-intelligence[local]       # LM Studio, the default backend
+# pip install meeting-intelligence[diarization]  # add pyannote speaker diarization
+# pip install meeting-intelligence[all]          # install every optional feature
+# pip install meeting-intelligence[dev]          # pytest and ruff
 ```
 
-Or install from wheel:
+For development from a source checkout:
 
 ```bash
-pip install dist/meeting_intelligence-0.6.0-py3-none-any.whl
+pip install -e .
 ```
+
+If you prefer a requirements file, run `pip install -r requirements.txt`.
 
 ## Quick Start / Быстрый старт
 
 ```bash
-pip install '.[local]'                    # LM Studio / локальный режим (по умолчанию)
-# pip install '.[diarization]'            # optional speaker diarization / опциональная диаризация
+pip install meeting-intelligence[local]   # LM Studio / локальный режим (по умолчанию)
+# pip install meeting-intelligence[diarization]  # optional speaker diarization / опциональная диаризация
 ```
 
 Set one backend / Выберите один backend:
@@ -63,13 +74,13 @@ PowerShell: replace `export NAME=value` with `$env:NAME = "value"`.
 meeting transcribe /path/to/meeting.mp4 --model small --language en --device cpu
 meeting translate /path/to/meeting.transcript.txt --target-lang ru --allow-cloud
 meeting protocol /path/to/meeting.transcript.txt --model qwen2.5-7b-instruct
-meeting process /path/to/meeting.mp4 --language en --target-lang ru --docx
+meeting process /path/to/meeting.mp4 --stt-model small --llm-model qwen2.5-7b-instruct --language en --target-lang ru --docx
 
 # Русский
 meeting transcribe /path/to/meeting.mp4 --model small --language en --device cpu
 meeting translate /path/to/meeting.transcript.txt --target-lang ru --allow-cloud
 meeting protocol /path/to/meeting.transcript.txt --model qwen2.5-7b-instruct
-meeting process /path/to/meeting.mp4 --language en --target-lang ru --docx
+meeting process /path/to/meeting.mp4 --stt-model small --llm-model qwen2.5-7b-instruct --language en --target-lang ru --docx
 ```
 
 Alternative module invocation:
