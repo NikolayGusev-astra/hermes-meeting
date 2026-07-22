@@ -468,14 +468,20 @@ def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
 def _verify_protocol(
     protocol: dict, transcript: str, model: str, allow_cloud: bool
 ) -> dict:
+    """Second-pass verification. Falls back to original protocol on failure."""
+    if not _protocol_verification_enabled():
+        return protocol
     enforce_cloud_policy(allow_cloud)
     from openai import OpenAI
 
+    # Use first 3000 chars of transcript as summary to avoid context overflow
+    transcript_summary = transcript[:3000]
     prompt = (
-        "Verify this protocol. Find: missed decisions, wrong assignees, "
-        "hallucinated participants. Output corrected JSON.\n\n"
+        "Verify this protocol against the transcript excerpt. "
+        "Find: missed decisions, wrong assignees, hallucinated participants. "
+        "Output corrected JSON.\n\n"
         f"Protocol:\n{json.dumps(protocol, ensure_ascii=False)}\n\n"
-        f"Original transcript:\n{transcript}"
+        f"Transcript (first 3000 chars):\n{transcript_summary}"
     )
     client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
     try:
@@ -484,15 +490,18 @@ def _verify_protocol(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
+                timeout=60,
             )
             .choices[0]
             .message.content.strip()
         )
     except Exception as exc:
-        _handle_exception(exc)
+        log.warning("Protocol verification failed, using original: %s", exc)
+        return protocol
     verified = _repair_json(content)
     if not isinstance(verified, dict):
-        fail("LLM returned invalid JSON for protocol verification")
+        log.warning("Verification returned invalid JSON, using original")
+        return protocol
     return verified
 
 
@@ -631,6 +640,7 @@ def write_protocol_docx(protocol: dict, path: Path) -> None:
             )
             doc.add_paragraph(f"{idx}. {text}")
     doc.save(path)
+    log.info("Saved DOCX: %s", path)
 
 
 def _now_iso() -> str:
@@ -706,7 +716,13 @@ def cmd_protocol(args: argparse.Namespace) -> int:
     if validation["valid"]:
         atomic_write_json(out_path, protocol)
         if getattr(args, "docx", False):
-            write_protocol_docx(protocol, src.with_suffix(".protocol.docx"))
+            try:
+                write_protocol_docx(protocol, src.with_suffix(".protocol.docx"))
+            except PermissionError:
+                from datetime import datetime
+                fallback = src.with_suffix(f".protocol.{datetime.now().strftime('%H%M%S')}.docx")
+                write_protocol_docx(protocol, fallback)
+                log.warning("DOCX locked, saved to: %s", fallback)
         log.info("Saved protocol: %s", out_path)
         return 0
     rejected = out_path.with_suffix(".protocol.rejected.json")
