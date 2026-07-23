@@ -403,7 +403,62 @@ def cmd_agent_transcript(args: argparse.Namespace) -> int:
     src = Path(args.transcript)
     if not src.exists():
         fail(f"Transcript not found: {src}")
-    print(json.dumps(prepare_agent_transcript(src.read_text(encoding="utf-8"), src)))
+    payload = prepare_agent_transcript(src.read_text(encoding="utf-8"), src)
+    if getattr(args, "docx", False):
+        output = (
+            Path(args.output)
+            if getattr(args, "output", None)
+            else src.with_suffix(".agent-transcript.docx")
+        )
+        write_text_docx(output, src.stem, payload["transcript"].splitlines())
+    print(json.dumps(payload))
+    return 0
+
+
+def _read_docx_input(path: Path) -> tuple[Optional[dict[str, Any]], str]:
+    text = path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None, text
+    if not isinstance(payload, dict):
+        fail("DOCX JSON input must be an object")
+    return payload, text
+
+
+def cmd_generate_docx(args: argparse.Namespace) -> int:
+    """Generate summary, analytical, or protocol DOCX from JSON or text input."""
+    src = Path(args.input)
+    if not src.exists():
+        fail(f"Input not found: {src}")
+    payload, text = _read_docx_input(src)
+    output = Path(args.output)
+
+    if args.type == "summary":
+        if payload:
+            write_summary_docx(
+                str(payload.get("title", src.stem)),
+                str(payload.get("speaker", "")),
+                str(payload.get("duration", "")),
+                payload.get("topics", []),
+                output,
+                payload.get("key_concepts", payload.get("concepts", [])),
+            )
+        else:
+            write_text_docx(output, src.stem, text.splitlines())
+    elif args.type == "analytical":
+        if payload:
+            sections = payload.get("sections", payload)
+            if not isinstance(sections, dict):
+                fail("Analytical JSON input must contain an object of sections")
+        else:
+            sections = {"Context": text}
+        write_analytical_docx(sections, output)
+    else:
+        if payload:
+            write_protocol_docx(payload, output)
+        else:
+            write_text_docx(output, "Meeting protocol", text.splitlines())
     return 0
 
 
@@ -756,12 +811,91 @@ def atomic_write_json(path: Path, data: dict) -> Path:
     return path
 
 
+def write_text_docx(path: Path, title: str, paragraphs: Iterable[str]) -> None:
+    """Write a small DOCX document from a title and plain-text paragraphs."""
+    from docx import Document
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = Document()
+    doc.add_heading(title, level=0)
+    for paragraph in paragraphs:
+        text = str(paragraph).strip()
+        if text:
+            doc.add_paragraph(text)
+    doc.save(path)
+    log.info("Saved DOCX: %s", path)
+
+
+def _docx_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return value.get("text") or value.get("name") or json.dumps(
+            value, ensure_ascii=False
+        )
+    return str(value)
+
+
+def write_summary_docx(
+    title: str,
+    speaker: str,
+    duration: str,
+    topics: Iterable[Any],
+    path: Path,
+    key_concepts: Optional[Iterable[Any]] = None,
+) -> None:
+    """Write a meeting or lecture summary with topics and timestamped concepts."""
+    from docx import Document
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = Document()
+    doc.add_heading(title, level=0)
+    metadata = "; ".join(
+        value for value in (f"Speaker: {speaker}" if speaker else "", f"Duration: {duration}" if duration else "") if value
+    )
+    if metadata:
+        doc.add_paragraph(metadata)
+    doc.add_heading("Key topics", level=1)
+    for topic in topics:
+        doc.add_paragraph(_docx_text(topic), style="List Bullet")
+    concepts = list(key_concepts or [])
+    if concepts:
+        doc.add_heading("Key concepts", level=1)
+        for concept in concepts:
+            if isinstance(concept, dict):
+                timestamp = concept.get("timestamp") or concept.get("time")
+                text = concept.get("text") or concept.get("concept") or _docx_text(concept)
+                doc.add_paragraph(
+                    f"{timestamp}: {text}" if timestamp else text,
+                    style="List Bullet",
+                )
+            else:
+                doc.add_paragraph(str(concept), style="List Bullet")
+    doc.save(path)
+    log.info("Saved DOCX: %s", path)
+
+
+def write_analytical_docx(sections: dict[str, str], path: Path) -> None:
+    """Write an analytical note with the supplied section text."""
+    from docx import Document
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = Document()
+    doc.add_heading("Analytical note", level=0)
+    for title, content in sections.items():
+        doc.add_heading(str(title), level=1)
+        for paragraph in str(content).split("\n\n"):
+            if paragraph.strip():
+                doc.add_paragraph(paragraph.strip())
+    doc.save(path)
+    log.info("Saved DOCX: %s", path)
+
+
 def write_protocol_docx(protocol: dict, path: Path) -> None:
-    if not protocol.get("quality", {}).get("valid"):
+    if protocol.get("quality") and not protocol["quality"].get("valid"):
         return
     from docx import Document
     from docx.shared import Pt, Cm
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document()
     for section in doc.sections:
         section.top_margin = Cm(2)
@@ -980,6 +1114,15 @@ def main() -> int:
         help="Emit a cleaned transcript JSON payload for agent consumption",
     )
     agent_transcript_p.add_argument("transcript", type=Path)
+    agent_transcript_p.add_argument("--docx", action="store_true", default=False)
+    agent_transcript_p.add_argument("--output", type=Path, default=None)
+
+    generate_docx_p = sub.add_parser(
+        "generate-docx", help="Generate DOCX from summary, analytical, or protocol content"
+    )
+    generate_docx_p.add_argument("--type", choices=("summary", "analytical", "protocol"), required=True)
+    generate_docx_p.add_argument("--input", type=Path, required=True)
+    generate_docx_p.add_argument("--output", type=Path, required=True)
 
     protocol_p = sub.add_parser("protocol")
     protocol_p.add_argument("transcript", type=Path)
@@ -1015,6 +1158,8 @@ def main() -> int:
             return cmd_translate(args)
         if args.command == "agent-transcript":
             return cmd_agent_transcript(args)
+        if args.command == "generate-docx":
+            return cmd_generate_docx(args)
         if args.command == "protocol":
             return cmd_protocol(args)
         if args.command == "process":
