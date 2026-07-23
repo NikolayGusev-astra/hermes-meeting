@@ -8,7 +8,6 @@ log = logging.getLogger("meeting")
 
 def _repair_json(text: str):
     """Try to fix common LLM JSON errors: single quotes, trailing commas."""
-    import re
 
     try:
         return json.loads(text)
@@ -24,10 +23,12 @@ def _repair_json(text: str):
         return None
 
 def _build_protocol_chunk(transcript: str, model: str, allow_cloud: bool) -> dict:
-    enforce_cloud_policy(allow_cloud)
+    from .. import cli
+
+    cli.enforce_cloud_policy(allow_cloud)
     from openai import OpenAI
 
-    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    client = OpenAI(base_url=cli.LLM_BASE_URL, api_key=cli.LLM_API_KEY)
     # Strip segment IDs and duplicate speaker labels for cleaner LLM input
     import re as _re
 
@@ -57,7 +58,7 @@ def _build_protocol_chunk(transcript: str, model: str, allow_cloud: bool) -> dic
             temperature=0.1,
         )
     except Exception as exc:
-        _handle_exception(exc)
+        cli._handle_exception(exc)
     content = resp.choices[0].message.content.strip()
     if content.startswith("```"):
         content = "\n".join(content.splitlines()[1:])
@@ -70,4 +71,4 @@ def _build_protocol_chunk(transcript: str, model: str, allow_cloud: bool) -> dic
         if repaired is not None:
             log.warning("LLM JSON repaired: %s", exc)
             return repaired
-        fail(f"LLM returned invalid JSON for protocol: {exc}\nRaw: {content[:500]}")
+        cli.fail(f"LLM returned invalid JSON for protocol: {exc}\nRaw: {content[:500]}")

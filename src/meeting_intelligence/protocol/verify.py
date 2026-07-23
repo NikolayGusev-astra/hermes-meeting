@@ -12,11 +12,14 @@ def _verify_protocol(
     """Second-pass verification. Falls back to original protocol on failure."""
     if not _protocol_verification_enabled():
         return protocol
-    enforce_cloud_policy(allow_cloud)
+    from .. import cli
+    from .extract import _repair_json
+
+    cli.enforce_cloud_policy(allow_cloud)
     from openai import OpenAI
 
-    verify_url = os.getenv("MEETING_VERIFY_BASE_URL", LLM_BASE_URL)
-    verify_key = os.getenv("MEETING_VERIFY_API_KEY", LLM_API_KEY)
+    verify_url = os.getenv("MEETING_VERIFY_BASE_URL", cli.LLM_BASE_URL)
+    verify_key = os.getenv("MEETING_VERIFY_API_KEY", cli.LLM_API_KEY)
     verify_model = os.getenv("MEETING_VERIFY_MODEL", model)
     # Use first 3000 chars of transcript as summary to avoid context overflow
     transcript_summary = transcript[:3000]

@@ -69,7 +69,7 @@ def test_process_creates_transcript_and_protocol_from_tiny_wav(tmp_path, monkeyp
     assert _run_process(monkeypatch, wav_path) == 0
     assert calls["transcribe"] == (wav_path, "tiny")
     assert calls["protocol"][1:] == ("qwen2.5-7b-instruct", False)
-    assert wav_path.with_suffix(".transcript.txt").is_file()
+    assert (wav_path.parent / "транскрипт.txt").is_file()
     assert wav_path.with_suffix(".protocol.json").is_file()
 
 
@@ -103,7 +103,7 @@ def test_process_strips_short_repeated_token_garbage(tmp_path, monkeypatch):
 
     assert _run_process(monkeypatch, wav_path) == 0
 
-    saved = wav_path.with_suffix(".transcript.txt").read_text(encoding="utf-8")
+    saved = (wav_path.parent / "транскрипт.txt").read_text(encoding="utf-8")
     assert "с с с с" not in saved
     assert "Keep this line." in saved
 

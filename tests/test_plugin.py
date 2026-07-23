@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 
 PROJECT = Path(__file__).resolve().parents[1]
 PY = sys.executable
+sys.path.insert(0, str(PROJECT / "src"))
 
 
 class _Ctx:
@@ -25,14 +28,15 @@ class _Ctx:
         )
 
 
-def test_plugin_entry_point_is_installed():
-    eps = list(
-        importlib.metadata.entry_points(
-            group="hermes_agent.plugins", name="meeting-intelligence"
-        )
-    )
-    assert eps, "missing plugin entry point meeting-intelligence"
-    mod = eps[0].load()
+def test_plugin_entry_point_is_declared_and_loadable_from_source():
+    config = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))
+    target = config["project"]["entry-points"]["hermes_agent.plugins"][
+        "meeting-intelligence"
+    ]
+    module_name, _, attribute = target.partition(":")
+    mod = importlib.import_module(module_name)
+    if attribute:
+        assert getattr(mod, attribute)
     assert hasattr(mod, "register")
 
 

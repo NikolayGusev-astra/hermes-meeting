@@ -3,16 +3,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from importlib.util import find_spec
 import json
 import logging
 import os
 import re
 import subprocess
-import sys
-import tempfile
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -28,7 +25,8 @@ from .output import (
 from .output.docx import NAMES_RU
 from .protocol import _build_protocol_chunk, _protocol_verification_enabled, _verify_protocol
 from .protocol import chunk as _protocol_chunk
-from .sources import MeetingError, _is_url, _resolve_source, fail
+from .protocol.chunk import _needs_protocol_chunking
+from .sources import MeetingError, _resolve_source, fail
 from .transcribe import _clean_whisper_artifacts, transcribe_audio
 
 
