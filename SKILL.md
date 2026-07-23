@@ -129,6 +129,25 @@ When the transcript is ready, the agent MUST follow these rules:
 
 ### Phase 2: Meeting extraction
 
+**Before extraction — choose LLM backend.** Ask the user which model to use for analysis. Auto-detect available backends and present as options:
+
+1. **Codex** — `codex exec` available (best quality, OpenAI API, paid)
+2. **Current agent model** — the model running this agent (free, already loaded)
+3. **LM Studio** — localhost:1234 (free, local, needs model loaded)
+4. **Ollama** — localhost:11434 (free, local)
+5. **Cloud API** — OpenAI/Anthropic/etc. (paid, needs API key)
+
+Detection logic:
+```bash
+curl -s localhost:1234/v1/models && echo "LM Studio available"
+curl -s localhost:11434/api/tags && echo "Ollama available"
+which codex && echo "Codex available"
+```
+
+Default: ask user via clarify. If user says "codex" or "local" — use that. Store choice in memory.
+
+After backend chosen, proceed with extraction:
+
 Apply Phases 2 and 3 only when Phase 0 classifies the source as a meeting.
 For a lecture, extract the speaker, topics, key concepts, examples, and any
 intelligible Q&A. Do not recast teaching claims as decisions or audience
