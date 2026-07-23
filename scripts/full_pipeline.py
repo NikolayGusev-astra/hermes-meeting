@@ -205,23 +205,40 @@ def write_meeting_docs(item: Item, records: list[dict[str, str]]) -> None:
     samples = meaningful(records, 8)
     d = doc("Протокол" if ru else "Protocol", item.language)
     metadata(d, item)
-    for title in ("Повестка", "Решения", "Поручения", "Открытые вопросы", "Риски", "Следующие шаги", "Предупреждения качества"):
+    for title in (
+        "Повестка",
+        "Решения",
+        "Поручения",
+        "Открытые вопросы",
+        "Риски",
+        "Следующие шаги",
+        "Предупреждения качества",
+    ):
         heading(d, title)
         if title == "Предупреждения качества":
             para(d, item.quality)
-        else:
-            for r in samples[:2]:
+        elif title == "Повестка":
+            for r in samples:
                 para(d, r["text"], r["raw"])
+        else:
+            para(d, "Не выделено без дополнительной проверки исходной записи.")
     d.save(out / "protocol.docx")
-    quote = samples[0]["raw"] if samples else ""
-    write_sheet(out / "decision-register.xlsx", ["Решение", "Дата", "Согласовано", "Источник", "Время", "Предупреждение качества"], [["Требует проверки: явные решения выделены из записи.", "not_set", "unknown", quote, samples[0]["start"] if samples else "", item.quality]])
-    write_sheet(out / "assignment-list.xlsx", ["Поручение", "Исполнитель", "Срок", "Приоритет", "Источник", "Время", "Предупреждение качества"], [["Проверить и доработать зафиксированные замечания.", "unknown", "not_set", "medium", quote, samples[0]["start"] if samples else "", item.quality]])
+    write_sheet(
+        out / "decision-register.xlsx",
+        ["Решение", "Дата", "Согласовано", "Источник", "Время", "Предупреждение качества"],
+        [],
+    )
+    write_sheet(
+        out / "assignment-list.xlsx",
+        ["Поручение", "Исполнитель", "Срок", "Приоритет", "Источник", "Время", "Предупреждение качества"],
+        [],
+    )
     d = doc("План действий", item.language)
     metadata(d, item)
     heading(d, "Цель")
-    para(d, "Довести результаты обсуждения до проверяемой итоговой версии.")
-    for r in samples[:5]:
-        para(d, f"Статус: not_started; исполнитель: unknown; срок: not_set. {r['text']}", r["raw"])
+    para(d, "Явные поручения с исполнителем и сроком не выделены автоматически.")
+    heading(d, "Статус")
+    para(d, "not_started; требуется ручная проверка исходной записи.")
     d.save(out / "action-plan.docx")
 
 
