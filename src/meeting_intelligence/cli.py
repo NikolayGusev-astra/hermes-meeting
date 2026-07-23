@@ -70,7 +70,7 @@ def _transcribe_default_device() -> str:
 
 
 TRANSCRIBE_MODEL = os.getenv("MEETING_TRANSCRIBE_MODEL") or (
-    "medium" if _transcribe_default_device() == "cuda" else "small"
+    "large-v3" if _transcribe_default_device() == "cuda" else "small"
 )
 TRANSCRIBE_DEVICE = os.getenv("MEETING_TRANSCRIBE_DEVICE") or _transcribe_default_device()
 TRANSCRIBE_COMPUTE = os.getenv("MEETING_TRANSCRIBE_COMPUTE") or (
