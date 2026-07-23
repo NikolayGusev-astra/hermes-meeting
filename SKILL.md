@@ -190,6 +190,8 @@ If ANY critical check fails → set `quality.status: needs_review`, list failure
 
 ### Phase 4: Artifact generation
 
+**Naming convention:** See `docs/NAMING.md`. All folder and file names in Russian. Folder: `{date}_{type}_{topic}`. Files: `Протокол.docx`, `Саммари.docx`, etc.
+
 Use the route selected in Phase 0. Do not create artifacts that misrepresent
 the content type. Generate human-readable files for every route. DOCX is the
 primary document format; XLSX is required for registers and lists; PPTX is
