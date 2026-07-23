@@ -49,7 +49,7 @@ handling. Those actions require the user's separate, explicit request.
 ## Pipeline
 
 ```
-Audio/Video → meeting_transcribe → transcript.txt → meeting_agent_transcript → AGENT ANALYSIS → protocol.json
+Audio/Video → meeting_transcribe → transcript.txt → meeting_agent_transcript → AGENT ANALYSIS → human-readable artifacts
                                                          │
                                           ┌──────────────┼──────────────┐
                                           ▼              ▼              ▼
@@ -95,15 +95,20 @@ the content. Do not assume that an audio recording is a meeting.
 
 | Content type | Signals | Required artifacts |
 |---|---|---|
-| Meeting | Multiple participants jointly discuss, approve decisions, or assign work. | Summary, protocol JSON, analytical note. |
-| Lecture | One or more speakers teach topics and concepts, usually with examples and optional audience Q&A. | Summary and analytical note. Do not create a meeting protocol. |
-| Interview | Questions and answers structure the recording. | Summary, Q&A record, analytical note. |
-| Presentation | A speaker follows slides or a prepared script, with little or no discussion. | Summary, slide or script outline, analytical note. |
+| Meeting | Multiple participants jointly discuss, approve decisions, or assign work. | `transcript.txt`, `protocol.docx`, `summary.docx`, `analytical.docx`. |
+| Lecture | One or more speakers teach topics and concepts, usually with examples and optional audience Q&A. | `transcript.txt`, `summary.docx`, `analytical.docx`. Do not create a meeting protocol. |
+| Interview | Questions and answers structure the recording. | `transcript.txt`, `q-and-a-summary.docx`, `analytical.docx`. |
+| Presentation | A speaker follows slides or a prepared script, with little or no discussion. | `transcript.txt`, `slide-outline.pptx` or `slide-outline.docx`, `analytical.docx`. |
 
 Record the classification and its evidence in every produced artifact. If the
 format is mixed, choose the dominant format and preserve the secondary format
 in the summary, for example "lecture with Q&A". If it is ambiguous, ask the
 user or produce only a summary with a classification warning.
+
+Immediately tell the user the detected content type, duration, and language,
+then list the artifacts that will be produced. For example: "Detected: lecture
+(44 min, English). Producing: transcript, summary, analytical note. Protocol
+not applicable." This is a user-facing status update, not a JSON payload.
 
 When the transcript is ready, the agent MUST follow these rules:
 
@@ -155,70 +160,55 @@ Before finalizing, verify EVERY item:
 
 If ANY critical check fails → set `quality.status: needs_review`, list failures in `quality.warnings`.
 
-### Phase 4: Output
+### Phase 4: Artifact generation
 
 Use the route selected in Phase 0. Do not create artifacts that misrepresent
-the content type.
+the content type. Generate human-readable files for every route. DOCX is the
+primary document format. JSON may support internal extraction and validation,
+but never is a user deliverable.
 
 | Content type | Output artifacts |
 |---|---|
-| Meeting | Summary, protocol JSON, analytical note. |
-| Lecture | Summary and analytical note only. No protocol JSON. Include the speaker, topics, concepts, examples, and Q&A when present. |
-| Interview | Summary, a grounded Q&A record, and analytical note. |
-| Presentation | Summary, a slide or script outline, and analytical note. |
+| Meeting | `transcript.txt`, `protocol.docx`, `summary.docx`, `analytical.docx`. The protocol is the primary deliverable. |
+| Lecture | `transcript.txt`, `summary.docx`, `analytical.docx`. No protocol. Include the speaker, topics, concepts with timestamps, examples, and Q&A when present. |
+| Interview | `transcript.txt`, `q-and-a-summary.docx`, `analytical.docx`. |
+| Presentation | `transcript.txt`, `slide-outline.pptx` or `slide-outline.docx`, `analytical.docx`. |
 
-If a user explicitly requests a protocol for non-meeting content, write a
-short JSON explanation with `protocol_not_applicable: true`. Never fabricate
-decisions, assignments, participants, or deadlines to fit the meeting schema.
+`protocol_not_applicable` is an internal routing signal only. Never show it or
+any JSON protocol to the user. For non-meetings, skip protocol generation and
+say in the chat: "This is a lecture. I've prepared a summary and analysis
+instead of a meeting protocol." Adapt the content type in that sentence when
+needed. Never fabricate decisions, assignments, participants, or deadlines to
+fit the meeting schema.
 
-Produce the artifacts selected by the content type in this order: summary,
-structured record or outline when applicable, then analytical note. If the user
+Produce selected artifacts in this order: `transcript.txt`, the primary
+structured document or outline, `summary.docx` when applicable, then
+`analytical.docx`. If the user
 asks for “just summary”, produce only the summary. “Full analysis” means every
 artifact required by the selected content type.
 
 #### 1. Summary (саммари)
 
-A quick-scan brief in one or two paragraphs. For a meeting, state the topic,
-key decisions, and assignments. For other content, state the subject, key
-concepts, examples, and any Q&A. Use plain text or minimal Markdown. Do not
-introduce facts that are not in the transcript.
+A quick-scan brief in `summary.docx`. For a meeting, state the topic, key
+decisions, and assignments. For other content, state the subject, key concepts,
+examples, and any Q&A. Do not introduce facts that are not in the transcript.
+
+For a lecture, `summary.docx` must include the title, speaker, duration, key
+topics as a bullet list, key concepts with timestamps, and a Q&A summary when
+present.
 
 #### 2. Protocol (протокол)
 
-Produce the full structured record as JSON. A DOCX version is optional when
-the user requests it. Include participants, agenda, decisions, assignments,
-open questions, risks, and next steps. Every extracted item must retain its
-`source_quote` grounding; assignments must include assignee and deadline.
-
-```json
-{
-  "meeting": {
-    "title": "...",
-    "date": "2026-07-22",
-    "duration": "21:58",
-    "source_type": "transcript",
-    "language": "ru"
-  },
-  "participants": [...],
-  "agenda": [...],
-  "decisions": [...],
-  "assignments": [...],
-  "open_questions": [...],
-  "risks": [...],
-  "next_steps": [...],
-  "quality": {
-    "status": "valid | needs_review",
-    "errors": [],
-    "warnings": [],
-    "overall_confidence": 0-100,
-    "model_used": "deepseek-v4-pro"
-  }
-}
-```
+For meetings, create `protocol.docx` as the primary deliverable. Include the
+meeting metadata, participants, agenda, decisions, assignments, open questions,
+risks, next steps, and quality warnings. Every extracted item must retain its
+`source_quote` grounding; assignments must include assignee and deadline. Use
+an internal structured representation if needed to validate the content, but do
+not deliver that representation as JSON.
 
 #### 3. Analytical note (аналитическая записка)
 
-Produce a structured Markdown analysis with these sections:
+Create `analytical.docx` with these sections:
 
 1. **Контекст встречи.** Connection to prior meetings, related tasks, and strategic goals.
 2. **Анализ решений.** What was decided, deferred, and left implicit.
@@ -231,7 +221,15 @@ were not provided or explicitly requested through an allowed MCP system, say
 that the corresponding conclusion is limited to this transcript. Never present
 an inference, a missing fact, or a recommendation as an explicit decision.
 
-### Phase 5: Enrich (MCP — OPT-IN ONLY)
+### Phase 5: User-facing output
+
+Return a concise human-readable handoff that names the detected content type
+and links or attaches every generated artifact. Do not return raw JSON,
+`protocol_not_applicable`, internal routing metadata, or validation payloads.
+For a non-meeting, explicitly state that a protocol was not generated because
+the source is not a meeting, then name the documents prepared instead.
+
+### Phase 6: Enrich (MCP — OPT-IN ONLY)
 
 **CRITICAL: MCP enrichment is OFF by default.** The agent MUST NOT search Jira, Confluence, email, or calendar unless the user explicitly requests it. A random meeting video is NOT a license to rummage through corporate data.
 
