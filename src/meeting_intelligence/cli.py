@@ -462,7 +462,7 @@ def _transcribe_and_save(
     out = output or (
         Path(args.output)
         if getattr(args, "output", None)
-        else src.parent / NAMES_RU["transcript"]
+        else src.parent / f"{src.stem}.{NAMES_RU['transcript']}"
     )
     out.write_text(transcript, encoding="utf-8")
     atomic_write_json(
