@@ -36,16 +36,16 @@ class Item:
 
 
 ITEMS = (
-    Item(SOURCE / "1 лекция в пятницу.transcript.txt", "1_lecture_friday", "lecture", "en",
+    Item(SOURCE / "1 лекция в пятницу.transcript.txt", "1 лекция в пятницу", "lecture", "en",
          "Lecture: AI, knowledge bases and legal work", "44:23", "AI/RAG concepts and uses in legal work",
          "Transcript quality is degraded in places; speaker labels and several phrases are unreliable."),
-    Item(SOURCE / "2 лекция в пятницу.transcript.txt", "2_lecture_friday", "lecture", "en",
+    Item(SOURCE / "2 лекция в пятницу.transcript.txt", "2 лекция в пятницу", "lecture", "en",
          "Lecture: Legal AI workflows and answer reliability", "43:24", "Legal-AI workflow, evidence and answer reliability",
          "Transcript quality is degraded in places; speaker labels and several phrases are unreliable."),
     Item(SOURCE / "15330497137360.transcript.txt", "15330497137360", "meeting", "ru",
          "Рабочая встреча: замечания к методикам и показателям", "25:31", "Обсуждение замечаний к методикам и показателям",
          "Автоматическое разделение по спикерам ограничено: в записи преобладает SPEAKER_00."),
-    Item(SOURCE / "2026_04_09_15_03_04_1005_Группа_1_9_апреля_15_00_16_30_ЦУП.transcript.txt", "2026_04_09_15_03_04_1005_group_1", "meeting", "ru",
+    Item(SOURCE / "2026_04_09_15_03_04_1005_Группа_1_9_апреля_15_00_16_30_ЦУП.transcript.txt", "2026_04_09_15_03_04_1005_Группа_1_9_апреля_15_00_16_30_ЦУП", "meeting", "ru",
          "Рабочая встреча: KPI ИИ и спорт", "01:54:16", "Обсуждение KPI ИИ и спортивной тематики",
          "Проверить автоматическое разделение по спикерам перед внешним распространением."),
 )
