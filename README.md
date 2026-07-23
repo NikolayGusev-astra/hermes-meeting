@@ -1,5 +1,7 @@
 # Meeting Intelligence
 
+![Pipeline](docs/assets/pipeline-infographic.png)
+
 Meeting Intelligence turns audio, video, and supported media URLs into timestamped transcripts and grounded meeting protocols. It runs locally by default. Cloud LLMs require explicit opt-in.
 
 ## Requirements
