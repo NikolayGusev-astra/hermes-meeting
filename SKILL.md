@@ -88,6 +88,23 @@ Output: `<transcript>.translated.txt`
 
 ## Agent Protocol Extraction Rules
 
+### Phase 0: Content type detection
+
+After transcription and before extraction, read the full transcript and classify
+the content. Do not assume that an audio recording is a meeting.
+
+| Content type | Signals | Required artifacts |
+|---|---|---|
+| Meeting | Multiple participants jointly discuss, approve decisions, or assign work. | Summary, protocol JSON, analytical note. |
+| Lecture | One or more speakers teach topics and concepts, usually with examples and optional audience Q&A. | Summary and analytical note. Do not create a meeting protocol. |
+| Interview | Questions and answers structure the recording. | Summary, Q&A record, analytical note. |
+| Presentation | A speaker follows slides or a prepared script, with little or no discussion. | Summary, slide or script outline, analytical note. |
+
+Record the classification and its evidence in every produced artifact. If the
+format is mixed, choose the dominant format and preserve the secondary format
+in the summary, for example "lecture with Q&A". If it is ambiguous, ask the
+user or produce only a summary with a classification warning.
+
 When the transcript is ready, the agent MUST follow these rules:
 
 ### Phase 1: Read & Understand
@@ -96,7 +113,12 @@ When the transcript is ready, the agent MUST follow these rules:
 2. Identify participants: map SPEAKER_NN to real names using `--participants` flag or ask user via clarify if unknown. Sample quotes help: *«SPEAKER_00 says: "Женя появился, но молчит" — who is this?»*
 3. Note transcription artifacts (Whisper errors, repeated garbage, off-topic rants)
 
-### Phase 2: Extract
+### Phase 2: Meeting extraction
+
+Apply Phases 2 and 3 only when Phase 0 classifies the source as a meeting.
+For a lecture, extract the speaker, topics, key concepts, examples, and any
+intelligible Q&A. Do not recast teaching claims as decisions or audience
+members as meeting participants.
 
 Extract from transcript ONLY explicit statements. For each item, include `source_quote` — VERBATIM text from transcript.
 
@@ -135,16 +157,31 @@ If ANY critical check fails → set `quality.status: needs_review`, list failure
 
 ### Phase 4: Output
 
-Produce the requested artifacts in this order: **summary → protocol → analytical note**.
-The default is all three. If the user asks for “just summary”, produce only the
-summary. If the user asks for “full analysis”, produce all three artifacts.
+Use the route selected in Phase 0. Do not create artifacts that misrepresent
+the content type.
+
+| Content type | Output artifacts |
+|---|---|
+| Meeting | Summary, protocol JSON, analytical note. |
+| Lecture | Summary and analytical note only. No protocol JSON. Include the speaker, topics, concepts, examples, and Q&A when present. |
+| Interview | Summary, a grounded Q&A record, and analytical note. |
+| Presentation | Summary, a slide or script outline, and analytical note. |
+
+If a user explicitly requests a protocol for non-meeting content, write a
+short JSON explanation with `protocol_not_applicable: true`. Never fabricate
+decisions, assignments, participants, or deadlines to fit the meeting schema.
+
+Produce the artifacts selected by the content type in this order: summary,
+structured record or outline when applicable, then analytical note. If the user
+asks for “just summary”, produce only the summary. “Full analysis” means every
+artifact required by the selected content type.
 
 #### 1. Summary (саммари)
 
-A quick-scan executive brief in one or two paragraphs. State what the meeting
-was about, two or three key decisions, the main assignments, and who is doing
-what. Use plain text or minimal Markdown. Do not add `source_quote` fields.
-Do not introduce facts that are not in the transcript.
+A quick-scan brief in one or two paragraphs. For a meeting, state the topic,
+key decisions, and assignments. For other content, state the subject, key
+concepts, examples, and any Q&A. Use plain text or minimal Markdown. Do not
+introduce facts that are not in the transcript.
 
 #### 2. Protocol (протокол)
 
