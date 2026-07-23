@@ -25,13 +25,37 @@ log = logging.getLogger("meeting")
 MAX_FILE_MB = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
 MAX_DURATION_SEC = int(os.getenv("MEETING_MAX_DURATION_SEC", "7200"))
 TRANSCRIBE_MODEL = os.getenv("MEETING_TRANSCRIBE_MODEL", "small")
-TRANSCRIBE_DEVICE = os.getenv("MEETING_TRANSCRIBE_DEVICE", "cpu")
-TRANSCRIBE_COMPUTE = os.getenv("MEETING_TRANSCRIBE_COMPUTE", "int8")
+
+
+def _transcribe_default_device() -> str:
+    try:
+        from ctranslate2 import get_cuda_device_count as _cuda_count
+
+        if _cuda_count() > 0:
+            try:
+                import ctypes
+
+                ctypes.cdll.LoadLibrary("cublas64_12.dll")
+            except OSError:
+                log.warning("CUDA runtime missing, falling back to CPU")
+                return "cpu"
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+TRANSCRIBE_DEVICE = os.getenv("MEETING_TRANSCRIBE_DEVICE") or _transcribe_default_device()
+TRANSCRIBE_COMPUTE = os.getenv("MEETING_TRANSCRIBE_COMPUTE") or (
+    "float16" if TRANSCRIBE_DEVICE == "cuda" else "int8"
+)
 TRANSCRIBE_LANG = os.getenv("MEETING_TRANSCRIBE_LANG", "en")
 LLM_BASE_URL = os.getenv("MEETING_LLM_BASE_URL", "http://localhost:1234/v1")
 LLM_API_KEY = os.getenv("MEETING_LLM_API_KEY", "lm-studio")
 LLM_MODEL = os.getenv("MEETING_LLM_MODEL", "qwen2.5-7b-instruct")
 TRANSLATE_BATCH_SIZE = int(os.getenv("MEETING_TRANSLATE_BATCH_SIZE", "8"))
+
+
 PROTOCOL_CHUNK_THRESHOLD_TOKENS = 6000
 PROTOCOL_CHARS_PER_TOKEN = 4
 PROTOCOL_SECTIONS = (
