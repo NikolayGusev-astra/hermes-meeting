@@ -83,6 +83,27 @@ def test_transcribe_discards_runs_of_short_hallucination_segments():
         faster_whisper.WhisperModel = original
 
 
+def test_transcribe_warns_when_russian_cues_are_mistranscribed_as_english(caplog):
+    from unittest.mock import MagicMock
+
+    segment = MagicMock(start=0.0, end=5.0)
+    segment.text = "AkhmEtov discussed Minjust and Rosstandart requirements."
+    info = MagicMock(language="en", duration=5.0)
+    model = MagicMock()
+    model.transcribe.return_value = ([segment], info)
+    import faster_whisper
+
+    original = faster_whisper.WhisperModel
+    faster_whisper.WhisperModel = lambda *args, **kwargs: model
+    try:
+        audio = Path(tempfile.gettempdir()) / "mi_russian_cues.wav"
+        audio.write_bytes(b"RIFF")
+        transcribe_audio(audio, "tiny", "en", "cpu", "int8")
+        assert "Transcript may be Russian misdetected as English" in caplog.text
+    finally:
+        faster_whisper.WhisperModel = original
+
+
 def test_clean_whisper_artifacts_removes_repeated_single_character_line():
     transcript = "normal line\n" + " ".join(["а"] * 10) + "\nother line"
 

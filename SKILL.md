@@ -105,6 +105,15 @@ format is mixed, choose the dominant format and preserve the secondary format
 in the summary, for example "lecture with Q&A". If it is ambiguous, ask the
 user or produce only a summary with a classification warning.
 
+After classifying the content type, perform a language-quality check on the
+full transcript. Detect the actual language from its content, not only Whisper's
+reported language. If Whisper reports English but the transcript contains a high
+density of Russian-specific transliterated names or institutional terms (for
+example `AkhmEtov`, `Yakovlev`, `Minjust`, or `Rosstandart`), flag it as
+**probably Russian, transcribed as English — quality degraded**. Warn the user
+and offer to re-transcribe with `--language ru` before extraction or artifact
+generation.
+
 Immediately tell the user the detected content type, duration, and language,
 then list the artifacts that will be produced. For example: "Detected: lecture
 (44 min, English). Producing: transcript, summary, analytical note. Protocol
@@ -192,6 +201,16 @@ artifact required by the selected content type.
 A quick-scan brief in `summary.docx`. For a meeting, state the topic, key
 decisions, and assignments. For other content, state the subject, key concepts,
 examples, and any Q&A. Do not introduce facts that are not in the transcript.
+
+Scale summary depth to the recording duration:
+
+- Under 15 minutes: 2–3 paragraphs.
+- 15–60 minutes: about one page (5–8 paragraphs), with one paragraph per major topic.
+- Over 60 minutes: 1–2 pages (8–15 paragraphs), organized with topic headings.
+
+Each topic section must state what was discussed, the key points, any decisions
+or outcomes, and unresolved items. Keep all existing grounding and
+non-fabrication guardrails.
 
 For a lecture, `summary.docx` must include the title, speaker, duration, key
 topics as a bullet list, key concepts with timestamps, and a Q&A summary when

@@ -108,6 +108,30 @@ PROTOCOL_SECTIONS = (
     "unclear",
 )
 
+RUSSIAN_TRANSCRIPTION_PATTERNS = re.compile(
+    r"\b(?:"
+    r"akhmetov|yakovlev|ivanovich|petrovich|sergeevich|alexandrovich|"
+    r"vladimirovich|ovna|evna|ichna|"
+    r"minjust|minfin|minzdrav|minpromtorg|minobrnauki|mincifry|"
+    r"rosstandart|rostandart|rospotrebnadzor|rosreestr|roskomnadzor|"
+    r"gosduma|sovfed|pravitelstvo|"
+    r"russian federation"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_probably_russian_mistranscribed_as_english(
+    transcript: str, detected_language: str
+) -> bool:
+    """Identify English transcripts with a concentrated set of Russian cues."""
+    if detected_language.lower() != "en":
+        return False
+
+    word_count = len(re.findall(r"\b\w+\b", transcript))
+    russian_cue_count = len(RUSSIAN_TRANSCRIPTION_PATTERNS.findall(transcript))
+    return russian_cue_count >= 2 and russian_cue_count / max(word_count, 1) >= 0.01
+
 
 class MeetingError(Exception):
     pass
@@ -331,6 +355,12 @@ def transcribe_audio(
     final_lines = []
     for item in enriched:
         final_lines.append(f"{item['timestamp']} {item['speaker_id']} | {item['text']}")
+    transcript = "\n".join(final_lines)
+    if _is_probably_russian_mistranscribed_as_english(transcript, info.language):
+        log.warning(
+            "Transcript may be Russian misdetected as English. "
+            "Re-run with --language ru for better quality."
+        )
     meta = {
         "schema_version": "0.1.0",
         "stt_model": model,
@@ -342,7 +372,7 @@ def transcribe_audio(
         "duration": float(info.duration),
         "segment_count": len(enriched),
     }
-    return "\n".join(final_lines), meta
+    return transcript, meta
 
 
 def _clean_whisper_artifacts(transcript: str) -> str:
