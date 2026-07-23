@@ -7,6 +7,19 @@ from typing import Any, Iterable, Optional
 
 log = logging.getLogger("meeting")
 
+NAMES_RU = {
+    "protocol": "Протокол.docx",
+    "summary": "Саммари.docx",
+    "analytical": "Аналитическая_записка.docx",
+    "decision-register": "Реестр_решений.xlsx",
+    "assignment-list": "Список_поручений.xlsx",
+    "detailed-minutes": "Подробный_конспект.docx",
+    "action-plan": "План_действий.docx",
+    "executive-brief": "Справка.docx",
+    "knowledge-article": "Статья.docx",
+    "transcript": "транскрипт.txt",
+}
+
 
 def _save_docx(doc: Any, path: Path) -> None:
     """Create the destination directory, save a document, and record its path."""

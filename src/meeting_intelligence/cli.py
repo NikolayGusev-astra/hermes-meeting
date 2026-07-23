@@ -25,6 +25,7 @@ from .output import (
     write_summary_docx,
     write_text_docx,
 )
+from .output.docx import NAMES_RU
 from .protocol import _build_protocol_chunk, _protocol_verification_enabled, _verify_protocol
 from .protocol import chunk as _protocol_chunk
 from .sources import MeetingError, _is_url, _resolve_source, fail
@@ -457,7 +458,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         audio, args.model, args.language, args.device, args.compute_type
     )
     transcript = _clean_whisper_artifacts(transcript)
-    out = Path(args.output) if args.output else src.with_suffix(".transcript.txt")
+    out = Path(args.output) if args.output else src.parent / NAMES_RU["transcript"]
     out.write_text(transcript, encoding="utf-8")
     atomic_write_json(
         out.with_suffix(".transcript.json"), {"source_hash": sha256(src), **meta}
@@ -512,10 +513,12 @@ def cmd_protocol(args: argparse.Namespace) -> int:
         atomic_write_json(out_path, protocol)
         if getattr(args, "docx", False):
             try:
-                write_protocol_docx(protocol, src.with_suffix(".protocol.docx"))
+                write_protocol_docx(protocol, src.parent / NAMES_RU["protocol"])
             except PermissionError:
                 from datetime import datetime
-                fallback = src.with_suffix(f".protocol.{datetime.now().strftime('%H%M%S')}.docx")
+                fallback = src.parent / (
+                    f"Протокол.{datetime.now().strftime('%H%M%S')}.docx"
+                )
                 write_protocol_docx(protocol, fallback)
                 log.warning("DOCX locked, saved to: %s", fallback)
         log.info("Saved protocol: %s", out_path)
@@ -543,7 +546,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         audio, args.stt_model, args.language, args.device, args.compute_type
     )
     transcript = _clean_whisper_artifacts(transcript)
-    transcript_path = src.with_suffix(".transcript.txt")
+    transcript_path = src.parent / NAMES_RU["transcript"]
     transcript_path.write_text(transcript, encoding="utf-8")
     atomic_write_json(
         transcript_path.with_suffix(".transcript.json"),
@@ -579,7 +582,7 @@ def cmd_process(args: argparse.Namespace) -> int:
     if validation["valid"]:
         atomic_write_json(protocol_path, protocol)
         if args.docx:
-            write_protocol_docx(protocol, src.with_suffix(".protocol.docx"))
+            write_protocol_docx(protocol, src.parent / NAMES_RU["protocol"])
         log.info("Saved protocol: %s", protocol_path)
     else:
         rejected = protocol_path.with_suffix(".protocol.rejected.json")
