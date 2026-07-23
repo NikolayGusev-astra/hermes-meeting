@@ -28,4 +28,4 @@ def prepare_agent_transcript(transcript: str, source: Path) -> dict[str, Any]:
             segment_ids_stripped += 1
         if cleaned:
             cleaned_lines.append(cleaned)
-    return {"schema_version": "0.7.0", "transcript": "\n".join(cleaned_lines), "metadata": {"source": str(source), "source_hash": _sha256(source), "input_line_count": len(source_lines), "output_line_count": len(cleaned_lines), "garbage_lines_removed": len(source_lines) - len(without_artifacts), "segment_ids_stripped": segment_ids_stripped, "llm_called": False}}
+    return {"schema_version": "0.7.1", "transcript": "\n".join(cleaned_lines), "metadata": {"source": str(source), "source_hash": _sha256(source), "input_line_count": len(source_lines), "output_line_count": len(cleaned_lines), "garbage_lines_removed": len(source_lines) - len(without_artifacts), "segment_ids_stripped": segment_ids_stripped, "llm_called": False}}

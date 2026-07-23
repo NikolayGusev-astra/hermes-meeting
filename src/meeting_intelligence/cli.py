@@ -26,7 +26,7 @@ from .output.docx import NAMES_RU
 from .protocol import _build_protocol_chunk, _protocol_verification_enabled, _verify_protocol
 from .protocol import chunk as _protocol_chunk
 from .protocol.chunk import _needs_protocol_chunking
-from .sources import MeetingError, _resolve_source, fail
+from .sources import MeetingError, _is_url, _resolve_source, fail  # noqa: F401
 from .transcribe import _clean_whisper_artifacts, transcribe_audio
 
 

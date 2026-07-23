@@ -18,7 +18,7 @@ def test_package_smoke():
         [
             "-c",
             "import meeting_intelligence; "
-            "assert meeting_intelligence.__version__ == '0.7.0'",
+                "assert meeting_intelligence.__version__ == '0.7.1'",
         ],
         cwd=root,
     )

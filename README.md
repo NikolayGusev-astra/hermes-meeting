@@ -143,7 +143,7 @@ Available tools: `meeting_transcribe`, `meeting_translate`, `meeting_agent_trans
 Run this in a clean virtual environment after publishing. It installs every extra, imports the package, and verifies the release version:
 
 ```bash
-pip install 'meeting-intelligence[all]' && python -c "import meeting_intelligence; assert meeting_intelligence.__version__ == '0.7.0'; print(meeting_intelligence.__version__)"
+pip install 'meeting-intelligence[all]' && python -c "import meeting_intelligence; assert meeting_intelligence.__version__ == '0.7.1'; print(meeting_intelligence.__version__)"
 ```
 
 ## Development checks
