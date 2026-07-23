@@ -7,19 +7,25 @@ from typing import Any, Iterable, Optional
 
 log = logging.getLogger("meeting")
 
+
+def _save_docx(doc: Any, path: Path) -> None:
+    """Create the destination directory, save a document, and record its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(path)
+    log.info("Saved DOCX: %s", path)
+
+
 def write_text_docx(path: Path, title: str, paragraphs: Iterable[str]) -> None:
     """Write a small DOCX document from a title and plain-text paragraphs."""
     from docx import Document
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document()
     doc.add_heading(title, level=0)
     for paragraph in paragraphs:
         text = str(paragraph).strip()
         if text:
             doc.add_paragraph(text)
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
+    _save_docx(doc, path)
 
 def _docx_text(value: Any) -> str:
     if isinstance(value, dict):
@@ -40,7 +46,6 @@ def write_summary_docx(
     """Write a meeting or lecture summary with topics and timestamped concepts."""
     from docx import Document
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document()
     doc.add_heading(title, level=0)
     russian = language.lower().startswith("ru")
@@ -73,14 +78,12 @@ def write_summary_docx(
                 )
             else:
                 doc.add_paragraph(str(concept), style="List Bullet")
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
+    _save_docx(doc, path)
 
 def write_analytical_docx(sections: dict[str, str], path: Path, language: str = "en") -> None:
     """Write an analytical note with the supplied section text."""
     from docx import Document
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document()
     doc.add_heading("Аналитическая записка" if language.lower().startswith("ru") else "Analytical note", level=0)
     for title, content in sections.items():
@@ -88,8 +91,7 @@ def write_analytical_docx(sections: dict[str, str], path: Path, language: str = 
         for paragraph in str(content).split("\n\n"):
             if paragraph.strip():
                 doc.add_paragraph(paragraph.strip())
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
+    _save_docx(doc, path)
 
 def write_protocol_docx(protocol: dict, path: Path) -> None:
     if protocol.get("quality", {}).get("valid") is False:
@@ -97,7 +99,6 @@ def write_protocol_docx(protocol: dict, path: Path) -> None:
     from docx import Document
     from docx.shared import Pt, Cm
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document()
     for section in doc.sections:
         section.top_margin = Cm(2)
@@ -163,5 +164,4 @@ def write_protocol_docx(protocol: dict, path: Path) -> None:
         doc.add_heading("Предупреждения о качестве", level=1)
         for warning in quality["warnings"]:
             doc.add_paragraph(str(warning), style="List Bullet")
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
+    _save_docx(doc, path)
