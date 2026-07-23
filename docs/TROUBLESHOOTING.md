@@ -96,8 +96,20 @@ export HF_HUB_DISABLE_SYMLINKS_WARNING=1
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 ```
 
-```bash
-# CUDA работает?
+## distil-large-v3.5 — только английский!
+
+**Проблема:** Модель `distil-large-v3.5` (и все `distil-*`) — дистиллят под английский. Русскую речь выдаёт как английскую абракадабру.
+
+**Решение:** Для русского использовать `large-v3-turbo` (дефолт на GPU) или `medium`.
+
+| Модель | Русский | Английский | GPU |
+|--------|---------|------------|-----|
+| `large-v3-turbo` | ✅ | ✅ | ~20× |
+| `medium` | ✅ | ✅ | ~25× |
+| `distil-large-v3.5` | ❌ | ✅ | ~20× |
+| `small` | ⚠️ | ⚠️ | ~44× |
+
+## Быстрые проверки
 python -c "from ctranslate2 import get_cuda_device_count; print(get_cuda_device_count())"
 
 # Модель скачана?
