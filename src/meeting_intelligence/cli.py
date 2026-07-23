@@ -17,6 +17,26 @@ from urllib.parse import urlparse
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from .gpu import _transcribe_default_device
+from .output import (
+    prepare_agent_transcript,
+    write_analytical_docx,
+    write_protocol_docx,
+    write_summary_docx,
+    write_text_docx,
+)
+from .protocol import _build_protocol_chunk, _protocol_verification_enabled, _verify_protocol
+from .protocol import chunk as _protocol_chunk
+from .sources import MeetingError, _is_url, _resolve_source, fail
+from .transcribe import _clean_whisper_artifacts, transcribe_audio
+
+
+def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
+    """Build a protocol while retaining the legacy CLI monkeypatch seam."""
+    return _protocol_chunk.build_protocol(
+        transcript, model, allow_cloud, builder=_build_protocol_chunk
+    )
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
@@ -29,47 +49,6 @@ MAX_FILE_MB = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
 MAX_DURATION_SEC = int(os.getenv("MEETING_MAX_DURATION_SEC", "7200"))
 
 
-def _transcribe_default_device() -> str:
-    """Auto-detect best available device: cuda > mps > rocm > cpu."""
-    import platform as _platform
-
-    # 1. NVIDIA CUDA
-    try:
-        from ctranslate2 import get_cuda_device_count as _cuda_count
-
-        if _cuda_count() > 0:
-            # Probe for CUDA runtime: check pip-installed nvidia-cublas-cu12 or system PATH
-            _cublas_ok = False
-            import ctypes as _ct
-
-            for _dll in ("cublas64_12.dll", "cublas64_11.dll", "libcublas.so.12"):
-                try:
-                    _ct.cdll.LoadLibrary(_dll)
-                    _cublas_ok = True
-                    break
-                except OSError:
-                    pass
-            if not _cublas_ok:
-                try:
-                    import nvidia.cublas
-                    _cublas_dir = Path(nvidia.cublas.__path__[0]) / "bin" / "cublas64_12.dll"
-                    _ct.cdll.LoadLibrary(str(_cublas_dir))
-                    _cublas_ok = True
-                except Exception:
-                    pass
-            if not _cublas_ok:
-                log.warning("CUDA GPU found but runtime missing. Install: pip install meeting-intelligence[gpu]")
-                return "cpu"
-            log.info("Auto-detected device: cuda")
-            return "cuda"
-    except Exception:
-        pass
-
-    if _platform.system() == "Darwin" and _platform.machine() == "arm64":
-        log.info("Auto-detected device: cpu (Apple Silicon)")
-        return "cpu"
-
-    return "cpu"
 
 
 TRANSCRIBE_MODEL = os.getenv("MEETING_TRANSCRIBE_MODEL") or (
@@ -86,49 +65,13 @@ LLM_MODEL = os.getenv("MEETING_LLM_MODEL", "qwen2.5-7b-instruct")
 TRANSLATE_BATCH_SIZE = int(os.getenv("MEETING_TRANSLATE_BATCH_SIZE", "8"))
 
 
-PROTOCOL_CHUNK_THRESHOLD_TOKENS = 6000
-PROTOCOL_CHARS_PER_TOKEN = 4
-PROTOCOL_SECTIONS = (
-    "participants",
-    "agenda",
-    "decisions",
-    "assignments",
-    "open_questions",
-    "unclear",
-)
-
-RUSSIAN_TRANSCRIPTION_PATTERNS = re.compile(
-    r"\b(?:"
-    r"akhmetov|yakovlev|ivanovich|petrovich|sergeevich|alexandrovich|"
-    r"vladimirovich|ovna|evna|ichna|"
-    r"minjust|minfin|minzdrav|minpromtorg|minobrnauki|mincifry|"
-    r"rosstandart|rostandart|rospotrebnadzor|rosreestr|roskomnadzor|"
-    r"gosduma|sovfed|pravitelstvo|"
-    r"russian federation"
-    r")\b",
-    re.IGNORECASE,
-)
 
 
-def _is_probably_russian_mistranscribed_as_english(
-    transcript: str, detected_language: str
-) -> bool:
-    """Identify English transcripts with a concentrated set of Russian cues."""
-    if detected_language.lower() != "en":
-        return False
-
-    word_count = len(re.findall(r"\b\w+\b", transcript))
-    russian_cue_count = len(RUSSIAN_TRANSCRIPTION_PATTERNS.findall(transcript))
-    return russian_cue_count >= 2 and russian_cue_count / max(word_count, 1) >= 0.01
 
 
-class MeetingError(Exception):
-    pass
 
 
-def fail(message: str, code: int = 2) -> None:
-    log.error(message)
-    raise SystemExit(code)
+
 
 
 def _handle_exception(exc: Exception) -> None:
@@ -145,46 +88,8 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _is_url(value: str | Path) -> bool:
-    parsed = urlparse(str(value))
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _resolve_source(url_or_path: str | Path) -> Path:
-    if not _is_url(url_or_path):
-        return Path(url_or_path)
-    if find_spec("yt_dlp") is None:
-        fail("URL support requires yt-dlp; install meeting-intelligence[url]")
-
-    download_dir = Path(tempfile.mkdtemp(prefix="meeting-intelligence-"))
-    output_template = download_dir / "audio.%(ext)s"
-    command = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        "-x",
-        "--audio-format",
-        "wav",
-        "--no-playlist",
-        "--proxy", os.getenv("MEETING_YT_PROXY", ""),
-        "--output",
-        str(output_template),
-        str(url_or_path),
-    ]
-    log.info("Downloading audio from URL")
-    try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=600, check=False
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise MeetingError("yt-dlp timed out while downloading audio") from exc
-    if result.returncode != 0:
-        raise MeetingError(f"yt-dlp failed: {result.stderr[-400:]}")
-
-    audio = download_dir / "audio.wav"
-    if not audio.is_file() or audio.stat().st_size == 0:
-        raise MeetingError("yt-dlp did not produce a WAV audio file")
-    return audio
 
 
 def is_loopback_url(url: str) -> bool:
@@ -263,158 +168,18 @@ def extract_audio(src: Path, dst: Path) -> Path:
     return dst
 
 
-def _silence_speakers(segments, silence_gap: float = 1.5):
-    current = 0
-    previous_end = None
-    out = []
-    for seg in segments:
-        start = float(seg["start"])
-        if previous_end is not None and (start - previous_end) > silence_gap:
-            current += 1
-        item = dict(seg)
-        item["speaker_id"] = f"SPEAKER_{current:02d}"
-        out.append(item)
-        previous_end = float(item["end"])
-    return out
 
 
-def transcribe_audio(
-    audio: Path, model: str, language: Optional[str], device: str, compute_type: str
-) -> Tuple[str, dict]:
-    from faster_whisper import WhisperModel
-
-    log.info(
-        "Loading whisper model=%s device=%s compute_type=%s",
-        model,
-        device,
-        compute_type,
-    )
-    m = WhisperModel(model, device=device, compute_type=compute_type)
-    segments_iter, info = m.transcribe(
-        str(audio),
-        language=language,
-        beam_size=5,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=500),
-    )
-    log.info("Detected language=%s duration=%.1fs", info.language, info.duration)
-    segments = []
-    for idx, seg in enumerate(segments_iter, 1):
-        text = seg.text.strip()
-        if not text:
-            continue
-        item = {
-            "id": f"seg_{idx:04d}",
-            "start": float(seg.start),
-            "end": float(seg.end),
-            "text": text,
-            "speaker_id": "SPEAKER_00",
-        }
-        segments.append(item)
-        start_min = int(seg.start // 60)
-        start_sec = int(seg.start % 60)
-        end_min = int(seg.end // 60)
-        end_sec = int(seg.end % 60)
-        item["timestamp"] = (
-            f"[{start_min:02d}:{start_sec:02d}->{end_min:02d}:{end_sec:02d}]"
-        )
-    garbage_runs = []
-    run_start = None
-    for index, item in enumerate(segments):
-        if len(item["text"]) <= 2:
-            if run_start is None:
-                run_start = index
-        elif run_start is not None:
-            if index - run_start >= 5:
-                garbage_runs.append((run_start, index))
-            run_start = None
-    if run_start is not None and len(segments) - run_start >= 5:
-        garbage_runs.append((run_start, len(segments)))
-
-    if garbage_runs:
-        garbage_indexes = {
-            index for start, end in garbage_runs for index in range(start, end)
-        }
-        log.warning("Removed %d short Whisper artifact segments", len(garbage_indexes))
-        segments = [
-            item for index, item in enumerate(segments) if index not in garbage_indexes
-        ]
-
-    enriched = _silence_speakers(segments)
-    final_lines = []
-    for item in enriched:
-        final_lines.append(f"{item['timestamp']} {item['speaker_id']} | {item['text']}")
-    transcript = "\n".join(final_lines)
-    if _is_probably_russian_mistranscribed_as_english(transcript, info.language):
-        log.warning(
-            "Transcript may be Russian misdetected as English. "
-            "Re-run with --language ru for better quality."
-        )
-    meta = {
-        "schema_version": "0.1.0",
-        "stt_model": model,
-        "language": info.language,
-        "language_probability": float(
-            getattr(info, "language_probability", 0.0) or 0.0
-        ),
-        "no_speech_prob": float(getattr(info, "no_speech_prob", 0.0) or 0.0),
-        "duration": float(info.duration),
-        "segment_count": len(enriched),
-    }
-    return transcript, meta
 
 
-def _clean_whisper_artifacts(transcript: str) -> str:
-    """Remove Whisper hallucination lines made of repeated one-character tokens."""
-    clean_lines = []
-    for line in transcript.splitlines():
-        single_char_tokens = [token for token in line.split() if len(token) == 1]
-        if (
-            len(single_char_tokens) >= 4
-            and len(set(single_char_tokens)) == 1
-        ):
-            log.warning("Removed repeated-token Whisper artifact line")
-            continue
-        clean_lines.append(line)
-    return "\n".join(clean_lines)
 
 
-_SEGMENT_ID_PREFIX = re.compile(
-    r"^\s*(?:\[?(?:seg(?:ment)?[_ -]?\d+)\]?:?\s*(?:SPEAKER_\d+\s*)?)",
-    re.IGNORECASE,
-)
 
 
 def _agent_mode_enabled() -> bool:
     return os.getenv("MEETING_AGENT_MODE", "false").lower() in {"1", "true", "yes", "on"}
 
 
-def prepare_agent_transcript(transcript: str, source: Path) -> dict[str, Any]:
-    """Build the LLM-free, cleaned transcript payload consumed by meeting agents."""
-    source_lines = transcript.splitlines()
-    without_artifacts = _clean_whisper_artifacts(transcript).splitlines()
-    cleaned_lines = []
-    segment_ids_stripped = 0
-    for line in without_artifacts:
-        cleaned = _SEGMENT_ID_PREFIX.sub("", line).strip()
-        if cleaned != line.strip():
-            segment_ids_stripped += 1
-        if cleaned:
-            cleaned_lines.append(cleaned)
-    cleaned_transcript = "\n".join(cleaned_lines)
-    return {
-        "schema_version": "0.7.0",
-        "transcript": cleaned_transcript,
-        "metadata": {
-            "source": str(source),
-            "source_hash": sha256(source),
-            "input_line_count": len(source_lines),
-            "output_line_count": len(cleaned_lines),
-            "garbage_lines_removed": len(source_lines) - len(without_artifacts),
-            "segment_ids_stripped": segment_ids_stripped,
-            "llm_called": False,
-        },
-    }
 
 
 def cmd_agent_transcript(args: argparse.Namespace) -> int:
@@ -554,193 +319,22 @@ def translate_lines(lines: List[str], target_lang: str, allow_cloud: bool) -> Li
     return out
 
 
-def _protocol_chunk_size_tokens() -> int:
-    value = os.getenv(
-        "MEETING_PROTOCOL_CHUNK_SIZE", str(PROTOCOL_CHUNK_THRESHOLD_TOKENS)
-    )
-    try:
-        return max(1, int(value))
-    except ValueError:
-        log.warning(
-            "Invalid MEETING_PROTOCOL_CHUNK_SIZE=%r; using %s tokens",
-            value,
-            PROTOCOL_CHUNK_THRESHOLD_TOKENS,
-        )
-        return PROTOCOL_CHUNK_THRESHOLD_TOKENS
 
 
-def _needs_protocol_chunking(transcript: str) -> bool:
-    return len(transcript) > (
-        PROTOCOL_CHUNK_THRESHOLD_TOKENS * PROTOCOL_CHARS_PER_TOKEN
-    )
 
 
-def _split_protocol_transcript(transcript: str, chunk_size_chars: int) -> List[str]:
-    overlap_chars = max(1, chunk_size_chars // 10)
-    chunks = []
-    start = 0
-    while start < len(transcript):
-        end = min(len(transcript), start + chunk_size_chars)
-        if end < len(transcript):
-            line_end = transcript.rfind("\n", start + 1, end + 1)
-            if line_end > start:
-                end = line_end + 1
-        chunks.append(transcript[start:end])
-        if end == len(transcript):
-            break
-        start = max(start + 1, end - overlap_chars)
-    return chunks
 
 
-def _merge_protocol_chunks(protocols: Iterable[dict]) -> dict:
-    merged = {section: [] for section in PROTOCOL_SECTIONS}
-    seen_quotes = {section: set() for section in PROTOCOL_SECTIONS}
-    for protocol in protocols:
-        for section in PROTOCOL_SECTIONS:
-            items = protocol.get(section, [])
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                quote = (
-                    _normalize(item.get("source_quote", ""))
-                    if isinstance(item, dict)
-                    else ""
-                )
-                if quote and quote in seen_quotes[section]:
-                    continue
-                if quote:
-                    seen_quotes[section].add(quote)
-                merged[section].append(item)
-    return merged
 
 
-def _repair_json(text: str):
-    """Try to fix common LLM JSON errors: single quotes, trailing commas."""
-    import re
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip()
-    cleaned = re.sub(r"'([^']*)'(\s*:)", r'"\1"\2', cleaned)
-    cleaned = re.sub(r":\s*'([^']*)'", r': "\1"', cleaned)
-    cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        return None
 
 
-def _build_protocol_chunk(transcript: str, model: str, allow_cloud: bool) -> dict:
-    enforce_cloud_policy(allow_cloud)
-    from openai import OpenAI
-
-    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
-    # Strip segment IDs and duplicate speaker labels for cleaner LLM input
-    import re as _re
-
-    clean_transcript = _re.sub(
-        r"^seg_\d+\s+SPEAKER_(\d+)\s+\[\d{2}:\d{2}->\d{2}:\d{2}\]\s+SPEAKER_\d+\s+\|\s+",
-        r"[\g<1>] ",
-        transcript,
-        flags=_re.MULTILINE,
-    )
-    system = (
-        "You are a meeting secretary. Extract protocol from transcript ONLY from explicit statements. "
-        "Return VALID JSON ONLY. NO markdown fences. NO trailing commas. Use DOUBLE QUOTES. "
-        "Keys exactly: participants, agenda, decisions, assignments, open_questions, unclear. "
-        "participants: array of {\"name\": \"SPEAKER_NN\", \"source_quote\": \"first line spoken by this speaker\"}. "
-        "decisions: array of {\"text\": \"decision\", \"source_quote\": \"exact words from transcript\", \"approved_by\": [\"SPEAKER_NN\"]}. "
-        "assignments: array of {\"task\": \"task\", \"assignee\": \"SPEAKER_NN\", \"deadline\": \"date or not_set\", \"source_quote\": \"exact words\"}. "
-        "CRITICAL: name and assignee fields MUST contain ONLY SPEAKER_NN (SPEAKER_00, SPEAKER_01, etc). Never use real names. "
-        "source_quote MUST be exact text from transcript — copy VERBATIM, do not paraphrase."
-    )
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": clean_transcript},
-            ],
-            temperature=0.1,
-        )
-    except Exception as exc:
-        _handle_exception(exc)
-    content = resp.choices[0].message.content.strip()
-    if content.startswith("```"):
-        content = "\n".join(content.splitlines()[1:])
-    if content.endswith("```"):
-        content = "\n".join(content.splitlines()[:-1])
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as exc:
-        repaired = _repair_json(content)
-        if repaired is not None:
-            log.warning("LLM JSON repaired: %s", exc)
-            return repaired
-        fail(f"LLM returned invalid JSON for protocol: {exc}\nRaw: {content[:500]}")
 
 
-def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
-    if not _needs_protocol_chunking(transcript):
-        return _build_protocol_chunk(transcript, model, allow_cloud)
-
-    chunk_size_chars = _protocol_chunk_size_tokens() * PROTOCOL_CHARS_PER_TOKEN
-    chunks = _split_protocol_transcript(transcript, chunk_size_chars)
-    if len(chunks) == 1:
-        return _build_protocol_chunk(transcript, model, allow_cloud)
-    log.info("Building protocol from %s overlapping transcript chunks", len(chunks))
-    return _merge_protocol_chunks(
-        _build_protocol_chunk(chunk, model, allow_cloud) for chunk in chunks
-    )
 
 
-def _verify_protocol(
-    protocol: dict, transcript: str, model: str, allow_cloud: bool
-) -> dict:
-    """Second-pass verification. Falls back to original protocol on failure."""
-    if not _protocol_verification_enabled():
-        return protocol
-    enforce_cloud_policy(allow_cloud)
-    from openai import OpenAI
-
-    verify_url = os.getenv("MEETING_VERIFY_BASE_URL", LLM_BASE_URL)
-    verify_key = os.getenv("MEETING_VERIFY_API_KEY", LLM_API_KEY)
-    verify_model = os.getenv("MEETING_VERIFY_MODEL", model)
-    # Use first 3000 chars of transcript as summary to avoid context overflow
-    transcript_summary = transcript[:3000]
-    prompt = (
-        "Verify this protocol against the transcript excerpt. "
-        "Find: missed decisions, wrong assignees, hallucinated participants. "
-        "Output corrected JSON.\n\n"
-        f"Protocol:\n{json.dumps(protocol, ensure_ascii=False)}\n\n"
-        f"Transcript (first 3000 chars):\n{transcript_summary}"
-    )
-    client = OpenAI(base_url=verify_url, api_key=verify_key)
-    try:
-        content = (
-            client.chat.completions.create(
-                model=verify_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                timeout=60,
-            )
-            .choices[0]
-            .message.content.strip()
-        )
-    except Exception as exc:
-        log.warning("Protocol verification failed, using original: %s", exc)
-        return protocol
-    verified = _repair_json(content)
-    if not isinstance(verified, dict):
-        log.warning("Verification returned invalid JSON, using original")
-        return protocol
-    return verified
 
 
-def _protocol_verification_enabled() -> bool:
-    return os.getenv("MEETING_PROTOCOL_VERIFY", "true").lower() != "false"
 
 
 def _normalize(text: str) -> str:
@@ -831,168 +425,14 @@ def atomic_write_json(path: Path, data: dict) -> Path:
     return path
 
 
-def write_text_docx(path: Path, title: str, paragraphs: Iterable[str]) -> None:
-    """Write a small DOCX document from a title and plain-text paragraphs."""
-    from docx import Document
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc = Document()
-    doc.add_heading(title, level=0)
-    for paragraph in paragraphs:
-        text = str(paragraph).strip()
-        if text:
-            doc.add_paragraph(text)
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
 
 
-def _docx_text(value: Any) -> str:
-    if isinstance(value, dict):
-        return value.get("text") or value.get("name") or json.dumps(
-            value, ensure_ascii=False
-        )
-    return str(value)
 
 
-def write_summary_docx(
-    title: str,
-    speaker: str,
-    duration: str,
-    topics: Iterable[Any],
-    path: Path,
-    key_concepts: Optional[Iterable[Any]] = None,
-    language: str = "en",
-) -> None:
-    """Write a meeting or lecture summary with topics and timestamped concepts."""
-    from docx import Document
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc = Document()
-    doc.add_heading(title, level=0)
-    russian = language.lower().startswith("ru")
-    speaker_label = "Участники" if russian else "Speaker"
-    duration_label = "Продолжительность" if russian else "Duration"
-    topics_label = "Ключевые темы" if russian else "Key topics"
-    concepts_label = "Ключевые выводы" if russian else "Key concepts"
-    metadata = "; ".join(
-        value for value in (f"{speaker_label}: {speaker}" if speaker else "", f"{duration_label}: {duration}" if duration else "") if value
-    )
-    if metadata:
-        doc.add_paragraph(metadata)
-    doc.add_heading(topics_label, level=1)
-    for topic in topics:
-        if isinstance(topic, dict) and topic.get("heading"):
-            doc.add_heading(str(topic["heading"]), level=2)
-            doc.add_paragraph(str(topic.get("text", "")))
-        else:
-            doc.add_paragraph(_docx_text(topic), style="List Bullet")
-    concepts = list(key_concepts or [])
-    if concepts:
-        doc.add_heading(concepts_label, level=1)
-        for concept in concepts:
-            if isinstance(concept, dict):
-                timestamp = concept.get("timestamp") or concept.get("time")
-                text = concept.get("text") or concept.get("concept") or _docx_text(concept)
-                doc.add_paragraph(
-                    f"{timestamp}: {text}" if timestamp else text,
-                    style="List Bullet",
-                )
-            else:
-                doc.add_paragraph(str(concept), style="List Bullet")
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
 
 
-def write_analytical_docx(sections: dict[str, str], path: Path, language: str = "en") -> None:
-    """Write an analytical note with the supplied section text."""
-    from docx import Document
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc = Document()
-    doc.add_heading("Аналитическая записка" if language.lower().startswith("ru") else "Analytical note", level=0)
-    for title, content in sections.items():
-        doc.add_heading(str(title), level=1)
-        for paragraph in str(content).split("\n\n"):
-            if paragraph.strip():
-                doc.add_paragraph(paragraph.strip())
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
 
 
-def write_protocol_docx(protocol: dict, path: Path) -> None:
-    if protocol.get("quality", {}).get("valid") is False:
-        return
-    from docx import Document
-    from docx.shared import Pt, Cm
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc = Document()
-    for section in doc.sections:
-        section.top_margin = Cm(2)
-        section.bottom_margin = Cm(2)
-        section.left_margin = Cm(2)
-        section.right_margin = Cm(1)
-    style = doc.styles["Normal"]
-    style.font.name = "Times New Roman"
-    style.font.size = Pt(14)
-
-    doc.add_heading("Протокол совещания", level=0)
-    doc.add_paragraph("")
-
-    if protocol.get("participants"):
-        doc.add_heading("Участники", level=1)
-        table = doc.add_table(rows=1 + len(protocol["participants"]), cols=3)
-        table.style = "Table Grid"
-        table.rows[0].cells[0].text = "№"
-        table.rows[0].cells[1].text = "Участник"
-        table.rows[0].cells[2].text = "Основание (стенограмма)"
-        for idx, p in enumerate(protocol["participants"], 1):
-            table.rows[idx].cells[0].text = str(idx)
-            table.rows[idx].cells[1].text = p.get("name", str(p))
-            table.rows[idx].cells[2].text = p.get("source_quote", "")
-
-    for section_name in [
-        "agenda",
-        "decisions",
-        "assignments",
-        "open_questions",
-        "risks",
-        "next_steps",
-    ]:
-        items = protocol.get(section_name, [])
-        if not items:
-            continue
-        section_titles = {
-            "agenda": "Повестка",
-            "decisions": "Решения",
-            "assignments": "Поручения",
-            "open_questions": "Открытые вопросы",
-            "risks": "Риски",
-            "next_steps": "Следующие шаги",
-        }
-        doc.add_heading(section_titles[section_name], level=1)
-        for idx, item in enumerate(items, 1):
-            text = (
-                item.get("text")
-                or item.get("task")
-                or item.get("action")
-                or item.get("question")
-                or str(item)
-            )
-            doc.add_paragraph(f"{idx}. {text}")
-            if item.get("assignee") or item.get("who") or item.get("deadline") or item.get("when"):
-                assignee = item.get("assignee") or item.get("who") or "не указан"
-                deadline = item.get("deadline") or item.get("when") or "не указан"
-                doc.add_paragraph(f"Ответственный: {assignee}; срок: {deadline}.")
-            if item.get("source_quote"):
-                doc.add_paragraph(f"Основание (стенограмма): «{item['source_quote']}»")
-    quality = protocol.get("quality", {})
-    if quality.get("warnings"):
-        doc.add_heading("Предупреждения о качестве", level=1)
-        for warning in quality["warnings"]:
-            doc.add_paragraph(str(warning), style="List Bullet")
-    doc.save(path)
-    log.info("Saved DOCX: %s", path)
 
 
 def _now_iso() -> str:
