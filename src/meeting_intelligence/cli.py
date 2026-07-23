@@ -36,21 +36,33 @@ def _transcribe_default_device() -> str:
         from ctranslate2 import get_cuda_device_count as _cuda_count
 
         if _cuda_count() > 0:
-            # Probe for CUDA runtime DLLs (Windows) or libcublas.so (Linux)
-            try:
-                import ctypes as _ct
+            # Probe for CUDA runtime: check pip-installed nvidia-cublas-cu12 or system PATH
+            _cublas_ok = False
+            import ctypes as _ct
 
-                _ct.cdll.LoadLibrary("cublas64_12.dll")
-            except OSError:
+            for _dll in ("cublas64_12.dll", "cublas64_11.dll", "libcublas.so.12"):
                 try:
-                    _ct.cdll.LoadLibrary("cublas64_11.dll")
+                    _ct.cdll.LoadLibrary(_dll)
+                    _cublas_ok = True
+                    break
                 except OSError:
-                    try:
-                        _ct.cdll.LoadLibrary("libcublas.so.12")
-                    except OSError:
-                        log.warning("CUDA GPU found but runtime missing. "
-                                    "Install: pip install meeting-intelligence[gpu]")
-                        return "cpu"
+                    pass
+            if not _cublas_ok:
+                # Try nvidia site-packages (pip install nvidia-cublas-cu12)
+                try:
+                    import nvidia.cublas
+
+                    _cublas_dir = Path(nvidia.cublas.__path__[0]) / "bin" / "cublas64_12.dll"
+                    _ct.cdll.LoadLibrary(str(_cublas_dir))
+                    _cublas_ok = True
+                except Exception:
+                    pass
+            if not _cublas_ok:
+                log.warning(
+                    "CUDA GPU found but runtime missing. "
+                    "Install: pip install meeting-intelligence[gpu]"
+                )
+                return "cpu"
             log.info("Auto-detected device: cuda")
             return "cuda"
     except Exception:
