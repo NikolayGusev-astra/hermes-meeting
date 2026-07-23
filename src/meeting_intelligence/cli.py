@@ -24,7 +24,6 @@ log = logging.getLogger("meeting")
 
 MAX_FILE_MB = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
 MAX_DURATION_SEC = int(os.getenv("MEETING_MAX_DURATION_SEC", "7200"))
-TRANSCRIBE_MODEL = os.getenv("MEETING_TRANSCRIBE_MODEL", "small")
 
 
 def _transcribe_default_device() -> str:
@@ -48,44 +47,31 @@ def _transcribe_default_device() -> str:
                 except OSError:
                     pass
             if not _cublas_ok:
-                # Try nvidia site-packages (pip install nvidia-cublas-cu12)
                 try:
                     import nvidia.cublas
-
                     _cublas_dir = Path(nvidia.cublas.__path__[0]) / "bin" / "cublas64_12.dll"
                     _ct.cdll.LoadLibrary(str(_cublas_dir))
                     _cublas_ok = True
                 except Exception:
                     pass
             if not _cublas_ok:
-                log.warning(
-                    "CUDA GPU found but runtime missing. "
-                    "Install: pip install meeting-intelligence[gpu]"
-                )
+                log.warning("CUDA GPU found but runtime missing. Install: pip install meeting-intelligence[gpu]")
                 return "cpu"
             log.info("Auto-detected device: cuda")
             return "cuda"
     except Exception:
         pass
 
-    # 2. Apple Silicon / MPS
     if _platform.system() == "Darwin" and _platform.machine() == "arm64":
-        log.info("Auto-detected device: cpu (Apple Silicon — ARM optimizations active, unified memory)")
-        return "cpu"  # CTranslate2 ARM build is fast on M1/M2/M3
-
-    # 3. AMD ROCm
-    try:
-        from ctranslate2 import get_cuda_device_count as _rocm_count
-
-        if _rocm_count() > 0:
-            log.info("Auto-detected device: cuda (ROCm via CTranslate2)")
-            return "cuda"
-    except Exception:
-        pass
+        log.info("Auto-detected device: cpu (Apple Silicon)")
+        return "cpu"
 
     return "cpu"
 
 
+TRANSCRIBE_MODEL = os.getenv("MEETING_TRANSCRIBE_MODEL") or (
+    "medium" if _transcribe_default_device() == "cuda" else "small"
+)
 TRANSCRIBE_DEVICE = os.getenv("MEETING_TRANSCRIBE_DEVICE") or _transcribe_default_device()
 TRANSCRIBE_COMPUTE = os.getenv("MEETING_TRANSCRIBE_COMPUTE") or (
     "float16" if TRANSCRIBE_DEVICE == "cuda" else "int8"
