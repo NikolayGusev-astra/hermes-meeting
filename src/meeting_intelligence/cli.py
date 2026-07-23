@@ -28,20 +28,49 @@ TRANSCRIBE_MODEL = os.getenv("MEETING_TRANSCRIBE_MODEL", "small")
 
 
 def _transcribe_default_device() -> str:
+    """Auto-detect best available device: cuda > mps > rocm > cpu."""
+    import platform as _platform
+
+    # 1. NVIDIA CUDA
     try:
         from ctranslate2 import get_cuda_device_count as _cuda_count
 
         if _cuda_count() > 0:
+            # Probe for CUDA runtime DLLs (Windows) or libcublas.so (Linux)
             try:
-                import ctypes
+                import ctypes as _ct
 
-                ctypes.cdll.LoadLibrary("cublas64_12.dll")
+                _ct.cdll.LoadLibrary("cublas64_12.dll")
             except OSError:
-                log.warning("CUDA runtime missing, falling back to CPU")
-                return "cpu"
+                try:
+                    _ct.cdll.LoadLibrary("cublas64_11.dll")
+                except OSError:
+                    try:
+                        _ct.cdll.LoadLibrary("libcublas.so.12")
+                    except OSError:
+                        log.warning("CUDA GPU found but runtime missing. "
+                                    "Install: pip install meeting-intelligence[gpu]")
+                        return "cpu"
+            log.info("Auto-detected device: cuda")
             return "cuda"
     except Exception:
         pass
+
+    # 2. Apple Silicon / MPS
+    if _platform.system() == "Darwin" and _platform.machine() == "arm64":
+        log.info("Auto-detected device: cpu (Apple Silicon — ARM optimizations active, unified memory)")
+        return "cpu"  # CTranslate2 ARM build is fast on M1/M2/M3
+
+    # 3. AMD ROCm
+    try:
+        from ctranslate2 import get_cuda_device_count as _rocm_count
+
+        if _rocm_count() > 0:
+            log.info("Auto-detected device: cuda (ROCm via CTranslate2)")
+            return "cuda"
+    except Exception:
+        pass
+
     return "cpu"
 
 
