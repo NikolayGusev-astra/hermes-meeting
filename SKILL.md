@@ -102,6 +102,8 @@ Extract from transcript ONLY explicit statements. For each item, include `source
 
 **Participants:** `{"name": "string", "role": "string", "source_quote": "first line by this speaker"}`
 
+**Agenda:** `{"text": "topic discussed", "source_quote": "exact words"}`
+
 **Decisions:** `{"text": "decision", "source_quote": "exact words", "approved_by": ["name"]}`
 - A decision = explicitly agreed or approved outcome
 - NOT a decision: suggestion, hypothesis, question, joke, personal opinion
@@ -112,7 +114,7 @@ Extract from transcript ONLY explicit statements. For each item, include `source
 
 **Open questions:** `{"text": "question", "owner": "name or unknown", "source_quote": "..."}`
 **Risks:** `{"text": "risk", "severity": "high|medium|low", "source_quote": "..."}`
-**Next steps:** `{"action": "...", "who": "name", "when": "date or not_set"}`
+**Next steps:** `{"action": "...", "who": "name or unknown", "when": "date or not_set", "source_quote": "exact words"}`
 
 ### Phase 3: HALLUCINATION PREVENTION (mandatory)
 
@@ -123,6 +125,7 @@ Before finalizing, verify EVERY item:
 | Participants exist? | Every name must appear in transcript or be mapped via `--participants`. Never invent. |
 | Decisions grounded? | Every decision must have `source_quote` present in transcript (fuzzy 60% word match OK). |
 | Assignments grounded? | Every task must trace to an explicit statement. No tasks from general discussion. |
+| Other extracted items grounded? | Every agenda item, open question, risk, and next step must have a `source_quote` present in the transcript. |
 | Assignees grounded? | If name not in transcript → flag as warning. Transliterated names (Ivan→Иван) = warning, not error. |
 | Deadlines real? | If deadline looks fabricated (not in transcript) → flag as warning. |
 | Roles invented? | No job titles unless stated in transcript. |
@@ -130,7 +133,68 @@ Before finalizing, verify EVERY item:
 
 If ANY critical check fails → set `quality.status: needs_review`, list failures in `quality.warnings`.
 
-### Phase 4: Enrich (MCP — OPT-IN ONLY)
+### Phase 4: Output
+
+Produce the requested artifacts in this order: **summary → protocol → analytical note**.
+The default is all three. If the user asks for “just summary”, produce only the
+summary. If the user asks for “full analysis”, produce all three artifacts.
+
+#### 1. Summary (саммари)
+
+A quick-scan executive brief in one or two paragraphs. State what the meeting
+was about, two or three key decisions, the main assignments, and who is doing
+what. Use plain text or minimal Markdown. Do not add `source_quote` fields.
+Do not introduce facts that are not in the transcript.
+
+#### 2. Protocol (протокол)
+
+Produce the full structured record as JSON. A DOCX version is optional when
+the user requests it. Include participants, agenda, decisions, assignments,
+open questions, risks, and next steps. Every extracted item must retain its
+`source_quote` grounding; assignments must include assignee and deadline.
+
+```json
+{
+  "meeting": {
+    "title": "...",
+    "date": "2026-07-22",
+    "duration": "21:58",
+    "source_type": "transcript",
+    "language": "ru"
+  },
+  "participants": [...],
+  "agenda": [...],
+  "decisions": [...],
+  "assignments": [...],
+  "open_questions": [...],
+  "risks": [...],
+  "next_steps": [...],
+  "quality": {
+    "status": "valid | needs_review",
+    "errors": [],
+    "warnings": [],
+    "overall_confidence": 0-100,
+    "model_used": "deepseek-v4-pro"
+  }
+}
+```
+
+#### 3. Analytical note (аналитическая записка)
+
+Produce a structured Markdown analysis with these sections:
+
+1. **Контекст встречи.** Connection to prior meetings, related tasks, and strategic goals.
+2. **Анализ решений.** What was decided, deferred, and left implicit.
+3. **Оценка рисков.** What may fail, including schedule risks and resource gaps.
+4. **Рекомендации.** The agent's recommendations from the full transcript and, when explicitly requested, permitted corporate context.
+5. **Тренды.** Recurring themes, unresolved issues, and decision-making patterns across meetings.
+
+Clearly separate evidence from inference. If prior meetings or corporate context
+were not provided or explicitly requested through an allowed MCP system, say
+that the corresponding conclusion is limited to this transcript. Never present
+an inference, a missing fact, or a recommendation as an explicit decision.
+
+### Phase 5: Enrich (MCP — OPT-IN ONLY)
 
 **CRITICAL: MCP enrichment is OFF by default.** The agent MUST NOT search Jira, Confluence, email, or calendar unless the user explicitly requests it. A random meeting video is NOT a license to rummage through corporate data.
 
@@ -146,33 +210,6 @@ When the user explicitly asks (e.g. "создай задачи в Jira", "про
 | **Confluence** | Find meeting series page; append protocol |
 | **Email** | Send protocol to participants |
 | **Calendar** | Verify meeting time; find next available slots |
-
-### Phase 5: Output
-
-```json
-{
-  "meeting": {
-    "title": "...",
-    "date": "2026-07-22",
-    "duration": "21:58",
-    "source_type": "transcript",
-    "language": "ru"
-  },
-  "participants": [...],
-  "decisions": [...],
-  "assignments": [...],
-  "open_questions": [...],
-  "risks": [...],
-  "next_steps": [...],
-  "quality": {
-    "status": "valid | needs_review",
-    "errors": [],
-    "warnings": [],
-    "overall_confidence": 0-100,
-    "model_used": "deepseek-v4-pro"
-  }
-}
-```
 
 ## Environment
 
