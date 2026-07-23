@@ -442,7 +442,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def cmd_transcribe(args: argparse.Namespace) -> int:
+def _transcribe_and_save(
+    args: argparse.Namespace, model: str, output: Path | None = None
+) -> tuple[Path, str, dict]:
+    """Resolve, transcribe, clean, and persist a source file."""
     src = _resolve_source(args.source)
     if not src.exists():
         fail(f"File not found: {src}")
@@ -455,15 +458,24 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     if audio != src:
         extract_audio(src, audio)
     transcript, meta = transcribe_audio(
-        audio, args.model, args.language, args.device, args.compute_type
+        audio, model, args.language, args.device, args.compute_type
     )
     transcript = _clean_whisper_artifacts(transcript)
-    out = Path(args.output) if args.output else src.parent / NAMES_RU["transcript"]
+    out = output or (
+        Path(args.output)
+        if getattr(args, "output", None)
+        else src.parent / NAMES_RU["transcript"]
+    )
     out.write_text(transcript, encoding="utf-8")
     atomic_write_json(
         out.with_suffix(".transcript.json"), {"source_hash": sha256(src), **meta}
     )
     log.info("Saved transcript: %s", out)
+    return out, transcript, meta
+
+
+def cmd_transcribe(args: argparse.Namespace) -> int:
+    out, transcript, _ = _transcribe_and_save(args, args.model)
     if _agent_mode_enabled():
         print(json.dumps(prepare_agent_transcript(transcript, out)))
     return 0
@@ -530,29 +542,9 @@ def cmd_protocol(args: argparse.Namespace) -> int:
 
 
 def cmd_process(args: argparse.Namespace) -> int:
-    """Run the legacy end-to-end pipeline (legacy — prefer agent-driven via SKILL.md)."""
+    """Run the legacy end-to-end pipeline."""
+    transcript_path, transcript, _ = _transcribe_and_save(args, args.stt_model)
     src = _resolve_source(args.source)
-    if not src.exists():
-        fail(f"File not found: {src}")
-    check_resource_limits(src)
-    audio = (
-        src
-        if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"}
-        else src.with_suffix(".wav")
-    )
-    if audio != src:
-        extract_audio(src, audio)
-    transcript, transcript_meta = transcribe_audio(
-        audio, args.stt_model, args.language, args.device, args.compute_type
-    )
-    transcript = _clean_whisper_artifacts(transcript)
-    transcript_path = src.parent / NAMES_RU["transcript"]
-    transcript_path.write_text(transcript, encoding="utf-8")
-    atomic_write_json(
-        transcript_path.with_suffix(".transcript.json"),
-        {"source_hash": sha256(src), **transcript_meta},
-    )
-    log.info("Saved transcript: %s", transcript_path)
 
     if not args.skip_translate:
         translated = translate_lines(
