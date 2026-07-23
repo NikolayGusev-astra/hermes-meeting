@@ -93,12 +93,12 @@ Output: `<transcript>.translated.txt`
 After transcription and before extraction, read the full transcript and classify
 the content. Do not assume that an audio recording is a meeting.
 
-| Content type | Signals | Required artifacts |
+| Content type | Signals | Default document types |
 |---|---|---|
-| Meeting | Multiple participants jointly discuss, approve decisions, or assign work. | `transcript.txt`, `protocol.docx`, `summary.docx`, `analytical.docx`. |
-| Lecture | One or more speakers teach topics and concepts, usually with examples and optional audience Q&A. | `transcript.txt`, `summary.docx`, `analytical.docx`. Do not create a meeting protocol. |
-| Interview | Questions and answers structure the recording. | `transcript.txt`, `q-and-a-summary.docx`, `analytical.docx`. |
-| Presentation | A speaker follows slides or a prepared script, with little or no discussion. | `transcript.txt`, `slide-outline.pptx` or `slide-outline.docx`, `analytical.docx`. |
+| Meeting | Multiple participants jointly discuss, approve decisions, or assign work. | Protocol, summary, analytical note, register of decisions, assignment list, detailed minutes, action plan, executive brief. |
+| Lecture | One or more speakers teach topics and concepts, usually with examples and optional audience Q&A. | Summary, analytical note, detailed minutes, presentation outline, knowledge article, executive brief. Do not create a meeting protocol. |
+| Interview | Questions and answers structure the recording. | Q&A log, summary, analytical note, detailed minutes, executive brief. |
+| Presentation | A speaker follows slides or a prepared script, with little or no discussion. | Presentation outline, summary, analytical note, executive brief. |
 
 Record the classification and its evidence in every produced artifact. If the
 format is mixed, choose the dominant format and preserve the secondary format
@@ -173,15 +173,39 @@ If ANY critical check fails → set `quality.status: needs_review`, list failure
 
 Use the route selected in Phase 0. Do not create artifacts that misrepresent
 the content type. Generate human-readable files for every route. DOCX is the
-primary document format. JSON may support internal extraction and validation,
-but never is a user deliverable.
+primary document format; XLSX is required for registers and lists; PPTX is
+preferred for a presentation outline when slide-ready output is requested.
+JSON may support internal extraction and validation, but never is a user
+deliverable.
 
-| Content type | Output artifacts |
+Always produce `transcript.txt`. The following document types are the selectable
+output menu. Produce the default set for the detected content type on a full
+analysis request. When the user names document types, produce only those named
+types that apply to the content type. A request for "just summary" still
+produces only the summary.
+
+| Document type | Applies to | Format | Required sections or columns | When to produce |
+|---|---|---|---|---|
+| Summary (Саммари) | Meeting, lecture, interview, presentation | `summary.docx` | Subject, key points, outcomes, unresolved items; for lectures, speaker, duration, timestamped concepts, and Q&A when present. | Default for every content type except when the user requests a narrower set. |
+| Protocol (Протокол) | Meeting | `protocol.docx` | Metadata, participants, agenda, decisions, assignments, open questions, risks, next steps, quality warnings. | Default meeting primary deliverable. Never produce for a non-meeting. |
+| Analytical note (Аналитическая записка) | Meeting, lecture, interview, presentation | `analytical.docx` | Context, analysis of outcomes or claims, risks or limitations, recommendations, recurring themes. | Default for every content type on full analysis. |
+| Register of decisions (Реестр решений) | Meeting | `decision-register.xlsx` | One row per decision: decision, date or `not_set`, approvers, source_quote, timestamp, quality warning. | Default for meetings when at least one explicit decision exists. Do not infer decisions. |
+| Assignment list (Список поручений) | Meeting | `assignment-list.xlsx` | One row per assignment: task, executor, deadline, priority, source_quote, timestamp, quality warning. | Default for meetings when at least one explicit assignment exists. Use `unknown` and `not_set` rather than guessing. |
+| Detailed minutes (Подробный конспект) | Meeting, lecture, interview | `detailed-minutes.docx` | Chronological timestamped notes, speaker-by-speaker account, topic transitions, quoted decisions or Q&A where applicable. | Default for meetings and lectures; produce for interviews when the user asks for a chronological record. |
+| Presentation outline (План презентации) | Presentation, lecture | `presentation-outline.pptx` or `presentation-outline.docx` | Slide-by-slide title, key message, supporting points, suggested evidence or example, speaker notes when grounded. | Default for presentations and lectures. Use DOCX unless the user requests slide-ready PPTX. |
+| Q&A log (Журнал вопросов-ответов) | Interview, meeting, lecture | `q-and-a-log.docx` | Timestamped question, answer, questioner or respondent when known, source_quote, unresolved follow-up. | Default for interviews; produce for meetings and lectures only when intelligible Q&A is present. |
+| Knowledge article (Статья для базы знаний) | Lecture | `knowledge-article.docx` | Title, purpose, concepts, structured sections, examples, references mentioned in the source, glossary or takeaways when supported. | Default for lectures. Do not add external references unless the user explicitly requests permitted enrichment. |
+| Action plan (План действий) | Meeting | `action-plan.docx` or `action-plan.xlsx` | Objective, ordered next steps, owner, target date, dependencies, source_quote, status `not_started`. | Default for meetings when explicit next steps or assignments exist. Use XLSX when the user needs tracking or sorting; otherwise DOCX. |
+| Executive brief (Справка для руководства) | Meeting, lecture, interview, presentation | `executive-brief.docx` | One paragraph: subject, material outcome, decision or takeaway, immediate implication, and unresolved issue if any. | Default for every content type on full analysis; omit only when the user asks for a narrower set. |
+
+#### Default document selection by content type
+
+| Content type | Document types produced on full analysis |
 |---|---|
-| Meeting | `transcript.txt`, `protocol.docx`, `summary.docx`, `analytical.docx`. The protocol is the primary deliverable. |
-| Lecture | `transcript.txt`, `summary.docx`, `analytical.docx`. No protocol. Include the speaker, topics, concepts with timestamps, examples, and Q&A when present. |
-| Interview | `transcript.txt`, `q-and-a-summary.docx`, `analytical.docx`. |
-| Presentation | `transcript.txt`, `slide-outline.pptx` or `slide-outline.docx`, `analytical.docx`. |
+| Meeting | `protocol.docx`, `summary.docx`, `analytical.docx`, `decision-register.xlsx` when decisions exist, `assignment-list.xlsx` when assignments exist, `detailed-minutes.docx`, `action-plan.docx` when next steps or assignments exist, `executive-brief.docx`. |
+| Lecture | `summary.docx`, `analytical.docx`, `detailed-minutes.docx`, `presentation-outline.docx`, `knowledge-article.docx`, `q-and-a-log.docx` when Q&A is present, `executive-brief.docx`. |
+| Interview | `q-and-a-log.docx`, `summary.docx`, `analytical.docx`, `executive-brief.docx`. Produce `detailed-minutes.docx` only when requested. |
+| Presentation | `presentation-outline.docx` by default, or `presentation-outline.pptx` when requested, plus `summary.docx`, `analytical.docx`, `executive-brief.docx`. |
 
 `protocol_not_applicable` is an internal routing signal only. Never show it or
 any JSON protocol to the user. For non-meetings, skip protocol generation and
@@ -191,10 +215,12 @@ needed. Never fabricate decisions, assignments, participants, or deadlines to
 fit the meeting schema.
 
 Produce selected artifacts in this order: `transcript.txt`, the primary
-structured document or outline, `summary.docx` when applicable, then
-`analytical.docx`. If the user
-asks for “just summary”, produce only the summary. “Full analysis” means every
-artifact required by the selected content type.
+structured document or outline, operational XLSX documents, detailed minutes,
+`summary.docx` when applicable, `analytical.docx`, then `executive-brief.docx`.
+If the user
+asks for “just summary”, produce only the summary. “Full analysis” means the
+default document set for the selected content type, subject to the evidence
+conditions in the document menu.
 
 #### 1. Summary (саммари)
 
