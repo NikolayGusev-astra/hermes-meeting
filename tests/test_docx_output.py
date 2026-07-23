@@ -51,11 +51,17 @@ def test_generate_analytical_docx_from_json(tmp_path):
     ]
 
 
-def test_generate_protocol_docx_from_json_without_quality_metadata(tmp_path):
+def test_generate_protocol_docx_from_json_with_review_warning(tmp_path):
     source = tmp_path / "protocol.json"
     output = tmp_path / "protocol.docx"
     source.write_text(
-        json.dumps({"participants": [{"name": "Ada"}], "decisions": [{"text": "Ship"}]}),
+        json.dumps(
+            {
+                "participants": [{"name": "Ada"}],
+                "decisions": [{"text": "Ship"}],
+                "quality": {"status": "needs_review"},
+            }
+        ),
         encoding="utf-8",
     )
 

@@ -890,7 +890,7 @@ def write_analytical_docx(sections: dict[str, str], path: Path) -> None:
 
 
 def write_protocol_docx(protocol: dict, path: Path) -> None:
-    if protocol.get("quality") and not protocol["quality"].get("valid"):
+    if protocol.get("quality", {}).get("valid") is False:
         return
     from docx import Document
     from docx.shared import Pt, Cm
