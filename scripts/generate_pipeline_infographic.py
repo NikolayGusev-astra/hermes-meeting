@@ -4,7 +4,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 W, H = 1200, 900
-OUT = Path(__file__).with_name("pipeline-infographic.png")
+OUT = Path(__file__).resolve().parents[1] / "docs" / "assets" / "pipeline-infographic.png"
 FONT = Path(r"C:\Windows\Fonts\segoeui.ttf")
 FONT_BOLD = Path(r"C:\Windows\Fonts\segoeuib.ttf")
 

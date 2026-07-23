@@ -43,6 +43,8 @@ message context, or the location the user names, then route it as follows.
 Do not infer a source from unrelated chat history. Ask for the source when the
 user has not pointed to one clearly. Telegram forwarding and an explicitly
 requested email lookup identify a source; they do not authorize any other MCP.
+Never upload, send, create, modify, or delete external data as part of source
+handling. Those actions require the user's separate, explicit request.
 
 ## Pipeline
 
@@ -132,6 +134,10 @@ If ANY critical check fails → set `quality.status: needs_review`, list failure
 
 **CRITICAL: MCP enrichment is OFF by default.** The agent MUST NOT search Jira, Confluence, email, or calendar unless the user explicitly requests it. A random meeting video is NOT a license to rummage through corporate data.
 
+An explicit request authorizes only the named system and action. Confirm the
+target before creating Jira issues, updating Confluence, sending email, or
+changing calendar data. Do not treat a request to search as permission to write.
+
 When the user explicitly asks (e.g. "создай задачи в Jira", "проверь календарь", "сохрани в Confluence"), the agent MAY:
 
 | MCP Tool | Action |
@@ -185,3 +191,4 @@ When the user explicitly asks (e.g. "создай задачи в Jira", "про
 - No participant names invented; use `--participants` or ask user
 - Whisper garbage filtered before agent analysis
 - Audit metadata captured per run (model, duration, confidence)
+- MCP access is opt-in; a named request authorizes only the named action

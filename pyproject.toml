@@ -17,11 +17,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The core dependencies support the local and cloud LLM backends. These extras
+# make the installation intent explicit without adding duplicate packages.
 local = []
 cloud = []
 gpu = [
-    "nvidia-cublas-cu12; platform_system == 'Windows'",
-    "nvidia-cublas-cu12; platform_system == 'Linux'",
+    "nvidia-cublas-cu12; platform_system == 'Windows' or platform_system == 'Linux'",
 ]
 diarization = [
     "pyannote.audio>=3.1",
@@ -32,8 +33,7 @@ url = [
 all = [
     "pyannote.audio>=3.1",
     "yt-dlp",
-    "nvidia-cublas-cu12; platform_system == 'Windows'",
-    "nvidia-cublas-cu12; platform_system == 'Linux'",
+    "nvidia-cublas-cu12; platform_system == 'Windows' or platform_system == 'Linux'",
 ]
 dev = [
     "pytest",
