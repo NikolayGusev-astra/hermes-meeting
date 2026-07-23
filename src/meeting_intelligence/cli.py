@@ -22,6 +22,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("meeting")
 
+# Suppress HuggingFace symlinks warning on Windows (harmless, just noisy)
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
 MAX_FILE_MB = int(os.getenv("MEETING_MAX_FILE_MB", "2048"))
 MAX_DURATION_SEC = int(os.getenv("MEETING_MAX_DURATION_SEC", "7200"))
 

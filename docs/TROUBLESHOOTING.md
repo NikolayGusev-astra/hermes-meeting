@@ -84,7 +84,17 @@ http_proxy='' https_proxy='' HF_HUB_DISABLE_COMPRESSION=1 python -m meeting_inte
 
 ---
 
-## Быстрые проверки
+## Symlinks warning на Windows при загрузке моделей
+
+**Симптом:** `huggingface_hub` cache-system uses symlinks by default but your machine does not support them...
+
+**Решение:** Windows не поддерживает symlinks без Developer Mode. На функциональность не влияет — модели работают, просто занимают больше места. Warning подавляется:
+
+```bash
+export HF_HUB_DISABLE_SYMLINKS_WARNING=1
+# или в коде:
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+```
 
 ```bash
 # CUDA работает?
