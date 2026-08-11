@@ -1,10 +1,11 @@
-"""Hermes plugin registration for meeting intelligence tools."""
+"""Hermes plugin registration for meeting intelligence tools.
 
+Delegates to pipeline.py typed API (ADR-007). Handlers return the legacy
+{exit_code, stdout, stderr} JSON envelope for Hermes compat, but populate
+it from structured pipeline results instead of stdout-capture.
+"""
 from __future__ import annotations
 
-import argparse
-import contextlib
-import io
 import json
 import sys
 from pathlib import Path
@@ -12,35 +13,14 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from meeting_intelligence.cli import (
-    cmd_agent_transcript,
-    cmd_process,
-    cmd_protocol,
-    cmd_transcribe,
-    cmd_translate,
+from .. import pipeline
+from ..pipeline import (
+    ProcessParams,
+    ProtocolParams,
+    TranscribeParams,
+    TranslateParams,
 )
-
-
-def _invoke(fn: Callable[[argparse.Namespace], int], args: argparse.Namespace) -> dict:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            rc = fn(args)
-    except SystemExit as exc:
-        rc = int(exc.code) if exc.code is not None else 2
-    except Exception as exc:
-        return {"exit_code": 2, "stdout": stdout.getvalue(), "stderr": str(exc)}
-    return {"exit_code": int(rc), "stdout": stdout.getvalue(), "stderr": stderr.getvalue()}
-
-
-def _handler(fn: Callable[[argparse.Namespace], int], defaults: dict) -> Callable:
-    def handler(params: dict, **kwargs: Any) -> str:
-        del kwargs
-        args = argparse.Namespace(**(defaults | params))
-        return json.dumps(_invoke(fn, args))
-
-    return handler
+from ..sources import MeetingError
 
 
 def _schema(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -52,6 +32,65 @@ def _schema(name: str, description: str, properties: dict, required: list[str]) 
             "properties": properties,
             "required": required,
         },
+    }
+
+
+def _ok(payload: dict) -> str:
+    return json.dumps(
+        {"exit_code": 0, "stdout": json.dumps(payload, ensure_ascii=False), "stderr": ""},
+        ensure_ascii=False,
+    )
+
+
+def _err(code: int, msg: str) -> str:
+    return json.dumps({"exit_code": code, "stdout": "", "stderr": msg}, ensure_ascii=False)
+
+
+def _safe(fn: Callable[[], dict]) -> str:
+    try:
+        return _ok(fn())
+    except SystemExit as exc:
+        code = int(exc.code) if exc.code is not None else 2
+        return _err(code, "")
+    except MeetingError as exc:
+        return _err(2, str(exc))
+    except Exception as exc:
+        return _err(2, str(exc))
+
+
+def _protocol_payload(params: dict) -> dict:
+    r = pipeline.protocol(ProtocolParams(
+        transcript=Path(params["transcript"]),
+        model=params.get("model", "qwen2.5-7b-instruct"),
+        allow_cloud=params.get("allow_cloud", False),
+        docx=params.get("docx", False),
+        output=Path(params["output"]) if params.get("output") else None,
+    ))
+    return {
+        "protocol_path": str(r.protocol_path) if r.protocol_path else None,
+        "valid": r.valid,
+        "validation": r.validation,
+    }
+
+
+def _process_payload(params: dict) -> dict:
+    r = pipeline.process(ProcessParams(
+        source=params["source"],
+        stt_model=params.get("stt_model", "small"),
+        llm_model=params.get("llm_model", "qwen2.5-7b-instruct"),
+        language=params.get("language", "en"),
+        device=params.get("device", "cpu"),
+        compute_type=params.get("compute_type", "int8"),
+        target_lang=params.get("target_lang", "ru"),
+        skip_translate=params.get("skip_translate", False),
+        docx=params.get("docx", False),
+        allow_cloud=params.get("allow_cloud", False),
+    ))
+    return {
+        "transcript_path": str(r.transcript_path),
+        "translated_path": str(r.translated_path) if r.translated_path else None,
+        "protocol_path": str(r.protocol_path) if r.protocol_path else None,
+        "valid": r.valid,
     }
 
 
@@ -72,10 +111,18 @@ def register(ctx: Any) -> None:
             },
             ["source"],
         ),
-        handler=_handler(
-            cmd_transcribe,
-            {"model": "small", "language": "en", "device": "cpu", "compute_type": "int8", "output": None},
-        ),
+        handler=lambda params, **kw: _safe(lambda: {
+            "transcript_path": str(
+                pipeline.transcribe(TranscribeParams(
+                    source=params["source"],
+                    model=params.get("model", "small"),
+                    language=params.get("language", "en"),
+                    device=params.get("device", "cpu"),
+                    compute_type=params.get("compute_type", "int8"),
+                    output=Path(params["output"]) if params.get("output") else None,
+                )).transcript_path
+            )
+        }),
     )
 
     ctx.register_tool(
@@ -92,7 +139,16 @@ def register(ctx: Any) -> None:
             },
             ["transcript"],
         ),
-        handler=_handler(cmd_translate, {"target_lang": "ru", "allow_cloud": False, "output": None}),
+        handler=lambda params, **kw: _safe(lambda: {
+            "output_path": str(
+                pipeline.translate(TranslateParams(
+                    transcript=Path(params["transcript"]),
+                    target_lang=params.get("target_lang", "ru"),
+                    allow_cloud=params.get("allow_cloud", False),
+                    output=Path(params["output"]) if params.get("output") else None,
+                )).output_path
+            )
+        }),
     )
 
     ctx.register_tool(
@@ -104,7 +160,9 @@ def register(ctx: Any) -> None:
             {"transcript": {"type": "string"}},
             ["transcript"],
         ),
-        handler=_handler(cmd_agent_transcript, {}),
+        handler=lambda params, **kw: _safe(lambda: pipeline.agent_transcript(
+            Path(params["transcript"])
+        )),
     )
 
     ctx.register_tool(
@@ -122,10 +180,7 @@ def register(ctx: Any) -> None:
             },
             ["transcript"],
         ),
-        handler=_handler(
-            cmd_protocol,
-            {"model": "qwen2.5-7b-instruct", "allow_cloud": False, "docx": False, "output": None},
-        ),
+        handler=lambda params, **kw: _safe(lambda: _protocol_payload(params)),
     )
 
     ctx.register_tool(
@@ -148,18 +203,5 @@ def register(ctx: Any) -> None:
             },
             ["source"],
         ),
-        handler=_handler(
-            cmd_process,
-            {
-                "stt_model": "small",
-                "llm_model": "qwen2.5-7b-instruct",
-                "language": "en",
-                "device": "cpu",
-                "compute_type": "int8",
-                "target_lang": "ru",
-                "skip_translate": False,
-                "docx": False,
-                "allow_cloud": False,
-            },
-        ),
+        handler=lambda params, **kw: _safe(lambda: _process_payload(params)),
     )

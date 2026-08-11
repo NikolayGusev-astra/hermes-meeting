@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Intelligence</title>
+  <style>
+    :root {
+      --bg: #0f1117; --card: #1a1d28; --border: #2a2d3a;
+      --text: #e0e0e0; --muted: #888; --accent: #6c8cff; --ok: #4ade80; --err: #f87171;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text);
+      max-width: 760px; margin: 0 auto; padding: 24px 16px 60px;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 4px; }
+    .subtitle { color: var(--muted); font-size: 0.875rem; margin-bottom: 24px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 24px; margin-bottom: 16px;
+    }
+    .mode-toggle { display: flex; gap: 0; margin-bottom: 20px; border-radius: 8px; overflow: hidden; }
+    .mode-toggle button {
+      flex: 1; padding: 10px; border: 1px solid var(--border); background: var(--bg);
+      color: var(--muted); cursor: pointer; font-size: 0.875rem; transition: 0.15s;
+    }
+    .mode-toggle button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 6px; }
+    .field input[type="text"], .field input[type="url"], .field select {
+      width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 0.875rem;
+    }
+    .field input[type="file"] {
+      width: 100%; padding: 10px; background: var(--bg); border: 1px dashed var(--border);
+      border-radius: 8px; color: var(--text); font-size: 0.875rem;
+    }
+    .row { display: flex; gap: 16px; }
+    .row .field { flex: 1; }
+    .submit-btn {
+      width: 100%; padding: 14px; background: var(--accent); color: #fff; border: none;
+      border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: 0.15s;
+    }
+    .submit-btn:hover { filter: brightness(1.15); }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status-area { display: none; }
+    .status-badge {
+      display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+    }
+    .status-pending, .status-running { background: #334155; color: #cbd5e1; }
+    .status-done { background: #166534; color: var(--ok); }
+    .status-error { background: #7f1d1d; color: var(--err); }
+    .spinner {
+      display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+      border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .file-link {
+      display: block; padding: 10px 14px; margin-bottom: 8px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 8px; color: var(--accent);
+      text-decoration: none; font-size: 0.875rem; transition: 0.15s;
+    }
+    .file-link:hover { border-color: var(--accent); }
+    .error-msg { color: var(--err); font-size: 0.875rem; margin-top: 8px; word-break: break-word; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; }
+    .checkbox-row input { width: 18px; height: 18px; accent-color: var(--accent); }
+  </style>
+</head>
+<body>
+  <h1>Meeting Intelligence</h1>
+  <p class="subtitle">Transcribe audio/video → translate → extract meeting protocol. Local-first.</p>
+
+  <div class="card">
+    <div class="mode-toggle">
+      <button id="btn-upload" class="active" onclick="switchMode('upload')">Upload File</button>
+      <button id="btn-url" onclick="switchMode('url')">Paste URL</button>
+    </div>
+
+    <form id="job-form" onsubmit="submitJob(event)">
+      <div id="upload-field" class="field">
+        <label>Audio / Video File</label>
+        <input type="file" name="file" id="file-input" accept="audio/*,video/*,.mp3,.mp4,.wav,.m4a,.flac,.webm">
+      </div>
+      <div id="url-field" class="field" style="display:none">
+        <label>Media URL (requires yt-dlp)</label>
+        <input type="url" name="url" id="url-input" placeholder="https://example.com/meeting.mp4">
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>STT Model</label>
+          <select name="stt_model">
+            <option value="small" selected>small (fast)</option>
+            <option value="medium">medium</option>
+            <option value="large-v3-turbo">large-v3-turbo (accurate)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Source Language</label>
+          <select name="language">
+            <option value="en" selected>English</option>
+            <option value="ru">Russian</option>
+            <option value="de">German</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Translate To</label>
+          <select name="target_lang">
+            <option value="ru" selected>Russian</option>
+            <option value="en">English</option>
+            <option value="none">Skip</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field checkbox-row">
+        <input type="checkbox" name="allow_cloud" id="allow-cloud">
+        <label for="allow-cloud" style="margin:0; color:var(--text)">Allow cloud LLM (off by default — local only)</label>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submit-btn">Process Meeting</button>
+    </form>
+  </div>
+
+  <div id="status-area" class="card">
+    <div id="status-content"></div>
+    <div id="result-files"></div>
+    <div id="error-display"></div>
+  </div>
+
+  <script>
+    let currentMode = 'upload';
+    let pollTimer = null;
+
+    function switchMode(mode) {
+      currentMode = mode;
+      document.getElementById('btn-upload').classList.toggle('active', mode === 'upload');
+      document.getElementById('btn-url').classList.toggle('active', mode === 'url');
+      document.getElementById('upload-field').style.display = mode === 'upload' ? '' : 'none';
+      document.getElementById('url-field').style.display = mode === 'url' ? '' : 'none';
+    }
+
+    async function submitJob(event) {
+      event.preventDefault();
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Starting...';
+
+      const form = document.getElementById('job-form');
+      let response;
+
+      try {
+        if (currentMode === 'upload') {
+          const fileInput = document.getElementById('file-input');
+          if (!fileInput.files[0]) { alert('Please select a file'); btn.disabled = false; btn.textContent = 'Process Meeting'; return; }
+          const fd = new FormData(form);
+          response = await fetch('/api/jobs', { method: 'POST', body: fd });
+        } else {
+          const url = document.getElementById('url-input').value.trim();
+          if (!url) { alert('Please enter a URL'); btn.disabled = false; btn.textContent = 'Process Meeting'; return; }
+          const fd = new FormData();
+          fd.append('url', url);
+          fd.append('stt_model', form.stt_model.value);
+          fd.append('language', form.language.value);
+          if (form.target_lang.value !== 'none') fd.append('target_lang', form.target_lang.value);
+          else fd.append('skip_translate', 'true');
+          if (form.allow_cloud.checked) fd.append('allow_cloud', 'true');
+          response = await fetch('/api/jobs', { method: 'POST', body: fd });
+        }
+      } catch (err) {
+        alert('Request failed: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Process Meeting';
+        return;
+      }
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        alert('Error: ' + (err.detail || response.statusText));
+        btn.disabled = false;
+        btn.textContent = 'Process Meeting';
+        return;
+      }
+
+      const job = await response.json();
+      document.getElementById('status-area').style.display = '';
+      pollJob(job.id);
+      btn.textContent = 'Processing...';
+    }
+
+    async function pollJob(jobId) {
+      if (pollTimer) clearInterval(pollTimer);
+
+      const poll = async () => {
+        try {
+          const res = await fetch('/api/jobs/' + jobId);
+          if (!res.ok) return;
+          const job = await res.json();
+          updateStatus(job);
+          if (job.status === 'done' || job.status === 'error') {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            const btn = document.getElementById('submit-btn');
+            btn.disabled = false;
+            btn.textContent = 'Process Meeting';
+          }
+        } catch (e) { /* retry on next tick */ }
+      };
+
+      poll();
+      pollTimer = setInterval(poll, 2000);
+    }
+
+    function updateStatus(job) {
+      const c = document.getElementById('status-content');
+      const filesDiv = document.getElementById('result-files');
+      const errDiv = document.getElementById('error-display');
+      errDiv.innerHTML = '';
+
+      const sourceLabel = job.source_type === 'url' ? 'URL' : 'File';
+      const spinner = (job.status === 'pending' || job.status === 'running')
+        ? '<span class="spinner"></span>' : '';
+
+      c.innerHTML = `
+        <div style="margin-bottom:12px">
+          <span class="status-badge status-${job.status}">${job.status.toUpperCase()}</span>
+          ${spinner}
+        </div>
+        <div style="font-size:0.8rem; color:var(--muted)">
+          ${sourceLabel}: ${job.source_name || '—'}
+        </div>`;
+
+      filesDiv.innerHTML = '';
+      if (job.status === 'done' && job.result) {
+        const fileList = job.result.files || [];
+        if (fileList.length === 0) {
+          filesDiv.innerHTML = '<p style="color:var(--muted);font-size:0.875rem">No output files generated.</p>';
+        } else {
+          filesDiv.innerHTML = '<div style="font-size:0.8rem;color:var(--muted);margin-bottom:8px">Download:</div>';
+          for (const f of fileList) {
+            const a = document.createElement('a');
+            a.className = 'file-link';
+            a.href = '/api/jobs/' + job.id + '/files/' + encodeURIComponent(f.filename);
+            a.textContent = '⬇ ' + f.label;
+            filesDiv.appendChild(a);
+          }
+        }
+        if (!job.result.valid) {
+          errDiv.innerHTML = '<p class="error-msg">Protocol validation failed — check protocol.rejected.json</p>';
+        }
+      }
+
+      if (job.status === 'error') {
+        errDiv.innerHTML = '<p class="error-msg">Error: ' + (job.error || 'Unknown') + '</p>';
+      }
+    }
+  </script>
+</body>
+</html>

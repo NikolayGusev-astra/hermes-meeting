@@ -4,22 +4,23 @@ description: >
   Local-first meeting pipeline: Whisper transcription → Hermes agent analysis → verified protocol.
   Agent reads the transcript with its own model, enriches with corporate context (Jira/Confluence/Email),
   and produces a grounded protocol with decisions, assignments, and risks.
-version: 0.7.0
-when_to_use:
-  - "User uploads meeting audio/video and needs a protocol with decisions + assignments."
-  - "Transcript exists and needs analysis, enrichment, or corporate cross-reference."
-counter_triggers:
-  - "Do NOT use for casual chat summarization — only structured meeting protocol."
-  - "Do NOT extract items without source_quote grounding."
-required_tools:
-  - meeting_transcribe
-  - meeting_agent_transcript
-  - meeting_translate (optional)
-optional_mcp:
-  - jira         # create tasks from assignments
-  - confluence   # save/update protocol pages
-  - email        # send protocol to participants
-  - calendar     # verify meeting time / find slots
+metadata:
+  version: "0.8.0"
+  when_to_use:
+    - "User uploads meeting audio/video and needs a protocol with decisions + assignments."
+    - "Transcript exists and needs analysis, enrichment, or corporate cross-reference."
+  counter_triggers:
+    - "Do NOT use for casual chat summarization — only structured meeting protocol."
+    - "Do NOT extract items without source_quote grounding."
+  required_tools:
+    - meeting_transcribe
+    - meeting_agent_transcript
+    - meeting_translate (optional)
+  optional_mcp:
+    - jira
+    - confluence
+    - email
+    - calendar
 ---
 
 # Meeting Intelligence

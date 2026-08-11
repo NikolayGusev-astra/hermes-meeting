@@ -3,5 +3,6 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 dist/
+artifacts/
 .eggs/
 temp_test_venv/

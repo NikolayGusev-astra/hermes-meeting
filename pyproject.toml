@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "meeting-intelligence"
-version = "0.7.1"
+version = "0.8.0"
 description = "Local-first meeting intelligence"
 requires-python = ">=3.10"
 dependencies = [
@@ -29,6 +29,14 @@ diarization = [
 ]
 url = [
     "yt-dlp",
+]
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+]
+mcp = [
+    "mcp>=1.0",
 ]
 all = [
     "pyannote.audio>=3.1",

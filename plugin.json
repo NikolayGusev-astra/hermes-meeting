@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "meeting-intelligence",
+  "version": "0.8.0",
+  "description": "Local-first meeting intelligence: Whisper transcription, translation, and verified protocol extraction.",
+  "license": "MIT",
+  "repository": "https://github.com/NikolayGusev-astra/hermes-meeting",
+  "keywords": ["meeting", "transcription", "whisper", "protocol", "agent-plugins"],
+  "extensions": {
+    "ru.hermes": {
+      "entrypoint": "meeting_intelligence.plugin:register"
+    }
+  }
+}
