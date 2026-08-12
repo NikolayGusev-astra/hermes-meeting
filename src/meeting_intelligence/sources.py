@@ -22,6 +22,42 @@ def _is_url(value: str | Path) -> bool:
     parsed = urlparse(str(value))
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
+# Domains that MUST go through proxy (blocked in Russia without VPN)
+_PROXY_DOMAINS = frozenset({
+    "youtube.com", "www.youtube.com", "youtu.be",
+    "m.youtube.com", "music.youtube.com",
+})
+
+# Domains that MUST go direct (Russian-hosted, break through proxy)
+_DIRECT_DOMAINS = frozenset({
+    "vkvideo.ru", "vk.com", "vk.ru",
+    "rutube.ru", "www.rutube.ru",
+})
+
+def _yt_proxy_for_url(url: str) -> str:
+    """Determine the --proxy argument for yt-dlp based on URL domain.
+
+    YouTube → MEETING_YT_PROXY (SOCKS5 tunnel, default socks5://127.0.0.1:12334).
+    VK / Rutube → empty (direct connection, bypasses system proxy).
+    Unknown → no proxy (safe default — won't break Russian-hosted content).
+    """
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+
+    if hostname in _PROXY_DOMAINS:
+        proxy = os.getenv("MEETING_YT_PROXY", "socks5://127.0.0.1:12334")
+        log.info("Platform: YouTube → proxy %s", proxy)
+        return proxy
+
+    if hostname in _DIRECT_DOMAINS:
+        log.info("Platform: %s → direct (no proxy)", hostname)
+        return ""
+
+    # Unknown domain: direct by default (safe for Russian platforms)
+    log.info("Platform: %s (unknown) → direct (no proxy)", hostname)
+    return ""
+
+
 def _resolve_source(url_or_path: str | Path) -> Path:
     if not _is_url(url_or_path):
         return Path(url_or_path)
@@ -30,6 +66,7 @@ def _resolve_source(url_or_path: str | Path) -> Path:
 
     download_dir = Path(tempfile.mkdtemp(prefix="meeting-intelligence-"))
     output_template = download_dir / "audio.%(ext)s"
+    proxy_arg = _yt_proxy_for_url(str(url_or_path))
     command = [
         sys.executable,
         "-m",
@@ -38,7 +75,7 @@ def _resolve_source(url_or_path: str | Path) -> Path:
         "--audio-format",
         "wav",
         "--no-playlist",
-        "--proxy", os.getenv("MEETING_YT_PROXY", ""),
+        "--proxy", proxy_arg,
         "--output",
         str(output_template),
         str(url_or_path),
