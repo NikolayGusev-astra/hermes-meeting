@@ -1,0 +1,8 @@
+{
+  "name": "meeting-intelligence",
+  "label": "Встречи",
+  "description": "Дашборд встреч: список обработанных транскрипций и артефактов (протоколы, саммари, аналитика)",
+  "icon": "Microphone",
+  "version": "0.8.1",
+  "api": "plugin_api.py"
+}
