@@ -16,6 +16,7 @@ from typing import Any
 # ── FastAPI (defensive: allow import for unit tests without dashboard deps) ──
 try:
     from fastapi import APIRouter, HTTPException
+    from fastapi.responses import FileResponse
 except Exception:  # Allows local unit tests without dashboard dependencies.
     class APIRouter:  # type: ignore
         def get(self, *a, **k):
@@ -30,6 +31,9 @@ except Exception:  # Allows local unit tests without dashboard dependencies.
         def __init__(self, status_code: int, detail: Any = None):
             self.status_code = status_code
             self.detail = detail
+    class FileResponse:  # type: ignore
+        def __init__(self, *a, **k):
+            raise RuntimeError("fastapi.responses.FileResponse unavailable")
 
 
 # Корень с обработанными встречами. Переопределяется через MEETING_ROOT (например,
@@ -114,3 +118,37 @@ def get_meeting(name: str):
 def get_state():
     """Псевдоним list_meetings — один запрос для UI-дашборда."""
     return list_meetings()
+
+
+def _safe_within(child: Path, root: Path) -> bool:
+    """True если path `child` (уже resolved) лежит внутри `root` (resolved)."""
+    try:
+        child.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+@router.get("/meetings/{name}/file/{filename}")
+def get_meeting_file(name: str, filename: str):
+    """Отдать байты артефакта встречи для открытия/скачивания из UI.
+
+    Path-traversal защищён дважды: берём только basename имени каталога и файла
+    (любые '..' / '/' обрезаются) И проверяем, что resolved-путь остался внутри
+    resolved-корня. Отдаём только «артефактные» расширения (документы/транскрипты),
+    чтобы не светить служебные файлы (generate_docs.py и т.п.).
+    """
+    root = _meeting_root().resolve()
+    safe_name = Path(name).name
+    meeting = (root / safe_name).resolve()
+    if not _safe_within(meeting, root) or not meeting.is_dir():
+        raise HTTPException(status_code=404, detail="meeting not found")
+
+    safe_file = Path(filename).name  # обрезает любые каталоги/обходы
+    target = (meeting / safe_file).resolve()
+    if not _safe_within(target, meeting) or not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if target.name in _IGNORE or target.suffix.lower() not in (_OUTPUT_EXTS | _TRANSCRIPT_EXTS):
+        raise HTTPException(status_code=404, detail="file not found")
+
+    return FileResponse(str(target), filename=safe_file)
