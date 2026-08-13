@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { host, useQuery, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, THEMES_AREA } from '@hermes/plugin-sdk'
+import { host, useQuery, useQueryClient, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, THEMES_AREA } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 // ── Встречи: дашборд обработанных встреч (стиль Штурмана, просмотр + открытие файлов) ──
@@ -28,6 +28,31 @@ const openFile = (name, file) => {
     const a = document.createElement('a'); a.href = url; a.download = file
     document.body.appendChild(a); a.click(); a.remove()
   } catch (_) { try { window.open(url, '_blank') } catch (__) {} }
+}
+
+// ── запуск пайплайна: открыть сессию агента с skill meeting-intelligence ──
+const MEETING_PROMPT = (src, opts) => {
+  const o = opts || {}
+  const parts = ['Обработай материал (встреча/лекция/интервью/презентация): ' + src + '.']
+  parts.push('Примени skill meeting-intelligence: сначала определи тип контента и язык, затем транскрибируй локальным Whisper (если это URL/media — скачай аудио через yt-dlp).')
+  if (o.translate !== false) parts.push('Если язык не русский — переведи транскрипт на русский.')
+  parts.push('Затем извлеки артефакты строго по правилам skill: протокол (для встречи), саммари, аналитическая записка, реестр решений, поручения. Каждое решение/поручение — с source_quote из транскрипта; не выдумывай имена, роли, дедлайны.')
+  parts.push('Готовые файлы (.docx/.xlsx/.txt) сохрани в папку встречи в MEETING_ROOT. В конце — краткий отчёт, что создано.')
+  if (o.cloud) parts.push('Разрешён cloud LLM (--allow-cloud).')
+  if (o.language && o.language !== 'auto') parts.push('Язык исходника: ' + o.language + '.')
+  return parts.join(' ')
+}
+const openMeetingSession = async (src, opts) => {
+  const short = (String(src || '').trim().split(/[\\/]/).pop() || 'материал').slice(0, 60)
+  try {
+    const sid = await host.request('session.create', { source: 'desktop', title: 'Встреча: ' + short })
+    try { await host.request('prompt.submit', { session_id: sid, text: MEETING_PROMPT(src, opts) }) } catch (_) {}
+    try { host.notify({ kind: 'success', message: 'Сессия запущена — транскрипция и анализ пошли.' }) } catch (_) {}
+    return true
+  } catch (e) {
+    try { host.notify({ kind: 'error', message: 'Не удалось открыть сессию: ' + ((e && e.message) || e) }) } catch (_) {}
+    return false
+  }
 }
 
 // ── helpers ──
@@ -150,6 +175,21 @@ const CSS = `
 .meet-help code{font-family:var(--st-mono);background:var(--st-soft);padding:2px 6px;border-radius:6px;font-size:11px;color:var(--st-ink)}
 .meet-help-body p{margin:6px 0}
 .st-foot{margin-top:28px;padding-top:16px;border-top:1px solid var(--st-line);color:var(--st-subtle);font-size:11px;font-family:var(--st-mono)}
+.meet-process{margin-bottom:18px;padding:16px 18px;border:1px solid var(--st-line);border-radius:14px;background:linear-gradient(135deg,#f7f6ff,#fff)}
+.meet-process-row{display:flex;gap:10px;flex-wrap:wrap}
+.meet-input{flex:1 1 320px;min-height:40px;border:1px solid var(--st-line);border-radius:10px;padding:0 14px;font-family:inherit;font-size:13px;background:#fff;color:var(--st-ink)}
+.meet-input:focus{outline:none;border-color:var(--st-accent)}
+.meet-btn{min-height:40px;border-radius:10px;border:0;padding:0 16px;cursor:pointer;font-weight:700;font-size:13px;font-family:inherit}
+.meet-btn.primary{background:var(--st-accent);color:#fff}
+.meet-btn.primary:disabled{opacity:.5;cursor:default}
+.meet-process-opts{margin-top:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.meet-link{background:transparent;border:0;color:var(--st-muted);font-size:12px;cursor:pointer;font-family:inherit;padding:0}
+.meet-link:hover{color:var(--st-accent)}
+.meet-process-adv{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--st-muted)}
+.meet-process-adv label{display:flex;align-items:center;gap:6px}
+.meet-process-adv select{min-height:30px;border:1px solid var(--st-line);border-radius:7px;padding:0 8px;font-family:inherit;font-size:12px;background:#fff}
+.meet-chk{cursor:pointer}
+.meet-process-hint{margin:10px 0 0;color:var(--st-subtle);font-size:11px;line-height:1.5}
 `
 
 const THEME_COLORS = {
@@ -203,12 +243,45 @@ function MeetingCard({ m, expanded, onToggle }) {
 }
 
 // ───────────────────────────────── main ─────────────────────────────────
+// ── Форма запуска пайплайна (путь/ссылка → сессия агента с skill) ──
+function ProcessForm({ onDone }) {
+  const [src, setSrc] = useState('')
+  const [lang, setLang] = useState('auto')
+  const [translate, setTranslate] = useState(true)
+  const [cloud, setCloud] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [advanced, setAdvanced] = useState(false)
+  const submit = async () => {
+    const s = src.trim()
+    if (!s || busy) return
+    setBusy(true)
+    const ok = await openMeetingSession(s, { language: lang, translate, cloud })
+    setBusy(false)
+    if (ok) { setSrc(''); onDone && onDone() }
+  }
+  return jsxs('div', { className: 'meet-process', children: [
+    jsxs('div', { className: 'meet-process-row', children: [
+      jsx('input', { className: 'meet-input', placeholder: 'Путь к файлу или ссылка (https://…)', value: src, onInput: (e) => setSrc(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') submit() } }),
+      jsx('button', { className: 'meet-btn primary', disabled: busy || !src.trim(), onClick: submit, children: busy ? 'Запускаю…' : '▶ Запустить пайплайн' }),
+    ] }),
+    jsxs('div', { className: 'meet-process-opts', children: [
+      jsx('button', { className: 'meet-link', onClick: () => setAdvanced(a => !a), children: (advanced ? '▾' : '▸') + ' Параметры' }),
+      advanced ? jsxs('div', { className: 'meet-process-adv', children: [
+        jsxs('label', { children: ['Язык ', jsx('select', { value: lang, onChange: (e) => setLang(e.target.value), children: [['auto', 'Авто'], ['ru', 'Русский'], ['en', 'English']].map(([v, l]) => jsx('option', { value: v, children: l }, v)) })] }),
+        jsxs('label', { className: 'meet-chk', children: [jsx('input', { type: 'checkbox', checked: translate, onChange: (e) => setTranslate(e.target.checked) }), ' перевод в RU'] }),
+        jsxs('label', { className: 'meet-chk', children: [jsx('input', { type: 'checkbox', checked: cloud, onChange: (e) => setCloud(e.target.checked) }), ' cloud LLM (--allow-cloud)'] }),
+      ] }) : null,
+    ] }),
+    jsx('p', { className: 'meet-process-hint', children: 'Агент транскрибирует (Whisper; URL→yt-dlp), извлечёт протокол/саммари/аналитику и сохранит артефакты в папку встречи. Список ниже обновится сам (рефреш 60 с).' }),
+  ] })
+}
+
 function MeetingsApp() {
   const { data: raw, isLoading, error } = useQuery({ queryKey: ['meet', 'list'], queryFn: async () => parseRest(await restGet('/meetings')), refetchInterval: 60000 })
   const [q, setQ] = useState('')
   const [typeF, setTypeF] = useState('all')
   const [openId, setOpenId] = useState(null)
-  const [showHelp, setShowHelp] = useState(false)
+  const qc = useQueryClient()
 
   const meetings = (raw && raw.meetings) || []
   const rootErr = raw && raw.error
@@ -248,16 +321,7 @@ function MeetingsApp() {
         : filtered.length === 0 ? jsx('div', { className: 'st-empty', children: meetings.length ? 'Ничего не найдено по фильтру' : 'Пока нет обработанных встреч' })
         : jsx('div', { className: 'meet-cols', children: filtered.map((m) => jsx(MeetingCard, { m, expanded: openId === m.name, onToggle: () => setOpenId(openId === m.name ? null : m.name) }, m.name)) }),
 
-      jsxs('details', { className: 'meet-help', open: showHelp, onToggle: (e) => setShowHelp(e.currentTarget.open), children: [
-        jsx('summary', { children: 'ⓘ Как обработать новую встречу' }),
-        jsxs('div', { className: 'meet-help-body', children: [
-          jsx('p', { children: '1. Транскрибируйте запись (аудио/видео):' }),
-          jsx('p', { children: jsx('code', { children: 'meeting transcribe "встреча.webm" --language ru' }) }),
-          jsx('p', { children: '2. Запустите агента по транскрипту — он соберёт протокол, саммари, аналитику, реестр решений и поручения:' }),
-          jsx('p', { children: jsx('code', { children: 'meeting agent-transcript "транскрипт.txt"' }) }),
-          jsx('p', { style: { marginTop: 10, color: 'var(--st-subtle)' }, children: 'Готовые файлы появятся в папке встречи и отобразятся здесь автоматически (обновление каждые 60 с).' }),
-        ] }),
-      ] }),
+      jsx(ProcessForm, { onDone: () => qc.invalidateQueries({ queryKey: ['meet', 'list'] }) }),
 
       jsxs('div', { className: 'st-foot', children: ['Встречи · meeting-intelligence · сканер папки, обновление каждые 60 с'] }),
     ] }),
@@ -273,6 +337,7 @@ export default {
       ctx.register({ id: 'page', area: ROUTES_AREA, data: { path: '/meetings' }, render: () => jsx(MeetingsApp, {}) })
       ctx.register({ id: 'nav', area: SIDEBAR_NAV_AREA, order: 70, data: { codicon: 'microphone', label: 'Встречи', path: '/meetings' } })
       ctx.register({ id: 'open', area: PALETTE_AREA, data: { id: 'meetings.open', label: 'Встречи: дашборд встреч', keywords: ['встречи', 'meeting', 'протокол', 'транскрипт', 'лекция'], run: () => { try { host.navigate('/meetings') } catch (_) {} } } })
+      ctx.register({ id: 'process', area: PALETTE_AREA, data: { id: 'meetings.process', label: 'Встречи: обработать файл/ссылку (пайплайн)', keywords: ['встреча', 'meeting', 'транскрипция', 'whisper', 'протокол', 'обработать', 'пайплайн'], run: () => { try { host.navigate('/meetings') } catch (_) {} } } })
       ctx.register({ id: 'theme', area: THEMES_AREA, data: { name: 'meetings', label: 'Встречи', description: 'Светлый дашборд встреч — белые карточки, индиго-акцент', colors: THEME_COLORS } })
     } catch (_) {}
   },
