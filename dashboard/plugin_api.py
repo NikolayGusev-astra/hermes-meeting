@@ -11,10 +11,20 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+
+# plugin_api грузится gateway standalone (importlib из dashboard/), не как часть
+# пакета — добавим src/ на sys.path, чтобы `from meeting_intelligence import ...`
+# работало в обработчиках (voiceprints и т.п.).
+_PLUGIN_SRC = Path(__file__).resolve().parent.parent / "src"
+if _PLUGIN_SRC.is_dir() and str(_PLUGIN_SRC) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_SRC))
 
 # ── FastAPI (defensive: allow import for unit tests without dashboard deps) ──
 try:
@@ -227,6 +237,195 @@ def _safe_within(child: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+_SPEAKER_LINE_RE = re.compile(r"^\[(\d{1,2}:\d{2})->(\d{1,2}:\d{2})\]\s+(\S+)\s+\|\s*(.*)$")
+
+
+def _mmss_to_sec(value: str) -> float:
+    minutes, seconds = value.strip().split(":", 1)
+    return float(int(minutes) * 60 + int(seconds))
+
+
+def _meeting_path(name: str) -> Path | None:
+    root = _meeting_root().resolve()
+    meeting = (root / Path(name).name).resolve()
+    return meeting if _safe_within(meeting, root) and meeting.is_dir() else None
+
+
+def _meeting_transcript_path(name: str) -> Path | None:
+    meeting = _meeting_path(name)
+    if meeting is None:
+        return None
+    try:
+        for path in meeting.rglob("*.txt"):
+            try:
+                if any(_SPEAKER_LINE_RE.match(line) for line in path.read_text(encoding="utf-8", errors="replace").splitlines()):
+                    return path
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return None
+
+
+def _meeting_source_audio(name: str) -> Path | None:
+    meeting = _meeting_path(name)
+    if meeting is None:
+        return None
+    try:
+        files = [path for path in meeting.rglob("*") if path.is_file() and path.suffix.lower() in _AUDIO_VIDEO_EXTS]
+    except OSError:
+        return None
+    if not files:
+        return None
+    wavs = [path for path in files if path.suffix.lower() == ".wav"]
+    return max(wavs or files, key=lambda path: path.stat().st_size)
+
+
+def _speaker_segments(transcript: Path, wanted_label: str | None = None) -> dict[str, dict]:
+    speakers: dict[str, dict] = {}
+    try:
+        lines = transcript.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return speakers
+    for line in lines:
+        match = _SPEAKER_LINE_RE.match(line)
+        if not match:
+            continue
+        start, end, label, text = match.groups()
+        if wanted_label is not None and label != wanted_label:
+            continue
+        try:
+            start_sec, end_sec = _mmss_to_sec(start), _mmss_to_sec(end)
+        except (TypeError, ValueError):
+            continue
+        if end_sec < start_sec:
+            continue
+        item = speakers.setdefault(label, {"label": label, "segments": [], "sample_line": "", "count": 0, "total_dur_sec": 0.0})
+        item["segments"].append([start_sec, end_sec])
+        item["count"] += 1
+        item["total_dur_sec"] += end_sec - start_sec
+        if text.strip() and not item["sample_line"]:
+            item["sample_line"] = text.strip()
+    return speakers
+
+
+def _extract_speaker_clip(audio_path: Path, segments: list, max_sec: float = 30.0) -> Path | None:
+    """Extract selected speech intervals into a temporary WAV; caller removes its parent."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="meeting-speaker-"))
+    parts: list[Path] = []
+    try:
+        elapsed = 0.0
+        unlimited = max_sec == float("inf")
+        for index, segment in enumerate(segments):
+            if len(segment) < 2:
+                continue
+            start, end = float(segment[0]), float(segment[1])
+            duration = max(0.0, end - start)
+            if not unlimited:
+                if elapsed >= max_sec:
+                    break
+                duration = min(duration, max_sec - elapsed)
+            if duration <= 0:
+                continue
+            part = temp_dir / f"segment{index}.wav"
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-ss", str(start), "-t", str(duration), "-i", str(audio_path), "-vn", "-c:a", "pcm_s16le", str(part)],
+                capture_output=True, timeout=120, stdin=subprocess.DEVNULL,
+            )
+            if result.returncode != 0 or not part.exists():
+                raise RuntimeError("ffmpeg could not extract speaker audio")
+            parts.append(part)
+            elapsed += duration
+        if not parts:
+            raise RuntimeError("no speaker audio segments")
+        concat_list = temp_dir / "concat.txt"
+        concat_list.write_text("".join(f"file '{part.as_posix()}'\n" for part in parts), encoding="utf-8")
+        output = temp_dir / "speaker.wav"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list), "-c:a", "pcm_s16le", str(output)],
+            capture_output=True, timeout=120, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0 or not output.exists():
+            raise RuntimeError("ffmpeg could not concatenate speaker audio")
+        for path in parts + [concat_list]:
+            path.unlink(missing_ok=True)
+        return output
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return None
+
+
+def _remove_speaker_clip(clip: Path | None) -> None:
+    if clip is not None:
+        shutil.rmtree(clip.parent, ignore_errors=True)
+
+
+@router.get("/meetings/{name}/speakers")
+def get_meeting_speakers(name: str):
+    transcript = _meeting_transcript_path(name)
+    if transcript is None:
+        return {"name": name, "speakers": [], "error": "no transcript"}
+    speakers = _speaker_segments(transcript)
+    return {"name": name, "speakers": list(speakers.values())}
+
+
+@router.get("/meetings/{name}/speaker/{label}/audio")
+def get_speaker_audio(name: str, label: str, max_sec: float = 30.0):
+    transcript = _meeting_transcript_path(name)
+    audio_path = _meeting_source_audio(name)
+    if transcript is None or audio_path is None:
+        raise HTTPException(status_code=404, detail="meeting transcript or audio not found")
+    segments = _speaker_segments(transcript, label).get(label, {}).get("segments", [])
+    if not segments:
+        raise HTTPException(status_code=404, detail="speaker not found")
+    clip = _extract_speaker_clip(audio_path, segments, max(0.0, max_sec))
+    if clip is None:
+        raise HTTPException(status_code=500, detail="could not extract speaker audio")
+    try:
+        import base64 as _b64
+        data = clip.read_bytes()
+        return {"filename": f"{Path(label).name}.wav", "size": len(data), "contentType": "audio/wav",
+                "base64": _b64.b64encode(data).decode("ascii")}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"could not read speaker audio: {exc}")
+    finally:
+        _remove_speaker_clip(clip)
+
+
+@router.post("/meetings/{name}/speaker/{label}/label")
+def label_speaker(name: str, label: str, body: dict = Body(default={})):
+    payload = body or {}
+    full_name = str(payload.get("full_name", "")).strip()
+    role = str(payload.get("role", "")).strip()
+    contact = str(payload.get("contact", "")).strip()
+    short = str(payload.get("short", "")).strip()
+    if not short:
+        raise HTTPException(status_code=400, detail="short required")
+    transcript = _meeting_transcript_path(name)
+    audio_path = _meeting_source_audio(name)
+    if transcript is None or audio_path is None:
+        raise HTTPException(status_code=400, detail="meeting transcript or audio not found")
+    segments = _speaker_segments(transcript, label).get(label, {}).get("segments", [])
+    if not segments:
+        raise HTTPException(status_code=400, detail="speaker not found")
+    clip = _extract_speaker_clip(audio_path, segments, float("inf"))
+    if clip is None:
+        raise HTTPException(status_code=400, detail="could not extract speaker audio")
+    try:
+        from meeting_intelligence import voiceprints
+        vector = voiceprints.compute_speaker_embedding_from_audio(clip, device="cuda")
+        voiceprints.save_profile(short, full_name, role, contact, vector, source_meeting=name)
+        voiceprints.save_voiceprint(short, vector)
+        profile = voiceprints.load_profiles().get(short, {})
+        voiceprints.write_profile_md(short, profile)
+        wiki_synced = bool(voiceprints.sync_to_wiki(short))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"could not label speaker: {exc}")
+    finally:
+        _remove_speaker_clip(clip)
+    return {"ok": True, "short": short, "full_name": full_name, "wiki_synced": wiki_synced}
 
 
 @router.get("/meetings/{name}/file/{filename}")

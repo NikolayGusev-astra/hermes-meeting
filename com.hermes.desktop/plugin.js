@@ -126,6 +126,13 @@ const fmtSize = (b) => {
   if (b < 1048576) return (b / 1024).toFixed(0) + ' КБ'
   return (b / 1048576).toFixed(1) + ' МБ'
 }
+const fmtBytes = (n) => {
+  const b = Number(n) || 0
+  if (b < 1024) return b + ' Б'
+  if (b < 1048576) return (b / 1024).toFixed(0) + ' КБ'
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' МБ'
+  return (b / 1073741824).toFixed(1) + ' ГБ'
+}
 const basename = (p) => { try { const s = String(p).replace(/[\\/]+$/, ''); return s.slice(s.replace(/\\/g, '/').lastIndexOf('/') + 1) } catch (_) { return p } }
 const plural = (n, one, few, many) => { const m10 = n % 10, m100 = n % 100; if (m10 === 1 && m100 !== 11) return one; if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few; return many }
 
@@ -173,6 +180,11 @@ const CSS = `
 .meet-pills{display:flex;gap:8px;flex-wrap:wrap}
 .meet-pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--st-line);background:var(--st-surface);
   border-radius:999px;padding:8px 12px;font-size:12px;font-weight:600}
+.meet-disk{display:flex;align-items:center;gap:10px;margin:-8px 0 16px;padding:9px 12px;border:1px solid var(--st-line);border-radius:10px;background:var(--st-surface);color:var(--st-muted);font-size:12px;font-weight:600}
+.meet-disk.danger{border-color:#f1c2b5;background:var(--st-danger-soft);color:var(--st-danger)}
+.meet-storage{margin-bottom:18px}
+.meet-storage-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.meet-storage-row .meet-input{min-height:38px}
 
 .meet-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
 .meet-search{min-height:36px;min-width:200px;flex:1 1 260px;border:1px solid var(--st-line);border-radius:10px;
@@ -198,6 +210,15 @@ const CSS = `
 .m-ext{font-family:var(--st-mono);font-size:9px;font-weight:800;padding:2px 5px;border-radius:5px;background:#fff;color:var(--st-accent);border:1px solid var(--st-line)}
 .m-size{font-family:var(--st-mono);font-size:10px;color:var(--st-subtle);font-weight:600}
 .m-path{margin-top:12px;font-family:var(--st-mono);font-size:10px;color:var(--st-subtle);word-break:break-all}
+.m-speaker{padding:10px;border:1px solid var(--st-line);border-radius:10px;background:var(--st-soft);margin-bottom:8px}
+.m-speaker:last-child{margin-bottom:0}
+.m-speaker-main{display:flex;gap:10px;align-items:flex-start}
+.m-speaker-audio{width:190px;max-width:100%;min-height:28px;flex:0 1 190px}
+.m-speaker-copy{min-width:0;flex:1;font-size:12px;line-height:1.45}
+.m-speaker-meta{margin-top:4px;color:var(--st-muted);font-size:11px}
+.m-speaker-form{display:grid;grid-template-columns:repeat(4,minmax(90px,1fr)) auto;gap:6px;margin-top:9px}
+.m-speaker-input{min-width:0;min-height:30px;border:1px solid var(--st-line);border-radius:7px;padding:0 8px;background:#fff;color:var(--st-ink);font:inherit;font-size:11px}
+@media(max-width:700px){.m-speaker-main{flex-direction:column}.m-speaker-form{grid-template-columns:repeat(2,minmax(0,1fr))}.m-speaker-form .st-copy-btn{grid-column:span 2}}
 
 .st-badge{display:inline-flex;padding:5px 9px;border-radius:999px;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
 .st-badge.good{color:var(--st-good);background:var(--st-good-soft)}
@@ -272,6 +293,81 @@ const THEME_COLORS = {
 }
 
 // ───────────────────────────────── card ─────────────────────────────────
+function SpeakerAudio({ name, label }) {
+  const [src, setSrc] = useState('')
+  const [state, setState] = useState('loading')
+  useEffect(() => {
+    let alive = true
+    let url = ''
+    const load = async () => {
+      try {
+        const d = await restGet('/meetings/' + encodeURIComponent(name) + '/speaker/' + encodeURIComponent(label) + '/audio?max_sec=30')
+        if (!d || !d.base64) throw new Error('нет аудио')
+        const bin = atob(d.base64)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        url = URL.createObjectURL(new Blob([bytes], { type: d.contentType || 'audio/wav' }))
+        if (alive) { setSrc(url); setState('ready') }
+      } catch (_) {
+        if (alive) setState('error')
+      }
+    }
+    load()
+    return () => { alive = false; if (url) URL.revokeObjectURL(url) }
+  }, [name, label])
+  if (state === 'loading') return jsx('span', { className: 'm-speaker-meta', children: '▶ загрузка аудио…' })
+  if (state === 'error') return jsx('span', { className: 'm-speaker-meta', children: 'нет аудио' })
+  return jsx('audio', { className: 'm-speaker-audio', controls: true, src })
+}
+
+function SpeakerRow({ name, speaker }) {
+  const qc = useQueryClient()
+  const [fullName, setFullName] = useState(speaker.full_name || '')
+  const [role, setRole] = useState(speaker.role || '')
+  const [contact, setContact] = useState(speaker.contact || '')
+  const [short, setShort] = useState(speaker.short || speaker.label || '')
+  const [saving, setSaving] = useState(false)
+  const save = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      const r = await restCall('/meetings/' + encodeURIComponent(name) + '/speaker/' + encodeURIComponent(speaker.label) + '/label', { method: 'POST', body: { full_name: fullName, role, contact, short } })
+      if (!r || !r.ok) throw new Error('не удалось сохранить')
+      try { host.notify({ kind: 'success', message: 'Метка спикера сохранена' }) } catch (_) {}
+      qc.invalidateQueries({ queryKey: ['meet', 'speakers', name] })
+    } catch (e) {
+      try { host.notify({ kind: 'error', message: 'Ошибка: ' + ((e && e.message) || e) }) } catch (_) {}
+    } finally { setSaving(false) }
+  }
+  return jsxs('div', { className: 'm-speaker', children: [
+    jsxs('div', { className: 'm-speaker-main', children: [
+      jsx(SpeakerAudio, { name, label: speaker.label }),
+      jsxs('div', { className: 'm-speaker-copy', children: [
+        jsx('div', { className: 'st-selectable', children: speaker.sample_line || '—' }),
+        jsx('div', { className: 'm-speaker-meta', children: (speaker.count || 0) + ' реплик · ' + Math.round(Number(speaker.total_dur_sec) || 0) + 'с' }),
+      ] }),
+    ] }),
+    jsxs('div', { className: 'm-speaker-form', children: [
+      jsx('input', { className: 'm-speaker-input', placeholder: 'ФИО', value: fullName, onInput: (e) => setFullName(e.target.value) }),
+      jsx('input', { className: 'm-speaker-input', placeholder: 'Должность', value: role, onInput: (e) => setRole(e.target.value) }),
+      jsx('input', { className: 'm-speaker-input', placeholder: 'Контакт', value: contact, onInput: (e) => setContact(e.target.value) }),
+      jsx('input', { className: 'm-speaker-input', placeholder: 'Short', value: short, onInput: (e) => setShort(e.target.value) }),
+      jsx('button', { className: 'st-copy-btn', disabled: saving, onClick: save, children: saving ? 'Сохраняю…' : 'Сохранить' }),
+    ] }),
+  ] })
+}
+
+function MeetingSpeakers({ name }) {
+  const sq = useQuery({ queryKey: ['meet', 'speakers', name], queryFn: () => restGet('/meetings/' + encodeURIComponent(name) + '/speakers'), enabled: false })
+  useEffect(() => { sq.refetch() }, [name])
+  const speakers = sq.data && sq.data.speakers
+  if (!speakers || !speakers.length) return null
+  return jsxs('div', { className: 'm-grp', children: [
+    jsx('div', { className: 'm-grp-l', children: '🎤 Спикеры' }),
+    jsx('div', { children: speakers.map((speaker) => jsx(SpeakerRow, { name, speaker }, speaker.label)) }),
+  ] })
+}
+
 function MeetingCard({ m, expanded, onToggle }) {
   const t = detectType(m.name)
   const docs = (m.artifacts || []).filter((a) => a.kind === 'docx')
@@ -303,6 +399,7 @@ function MeetingCard({ m, expanded, onToggle }) {
           a.size ? jsx('span', { className: 'm-size', children: fmtSize(a.size) }) : null,
         ] }, a.file)) }),
       ] }) : null,
+      jsx(MeetingSpeakers, { name: m.name }),
       jsxs('div', { className: 'm-path', children: ['📁 ', m.path] }),
     ] }) : null,
   ] })
@@ -384,8 +481,44 @@ function ProgressPanel({ meetings }) {
   ] })
 }
 
+function StorageGate({ config, qc }) {
+  const [root, setRoot] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { if (config && config.root) setRoot((value) => value || config.root) }, [config && config.root])
+  const create = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await restCall('/storage/config', { method: 'POST', body: { root } })
+      if (!r || !r.ok) throw new Error('не удалось создать структуру')
+      qc.invalidateQueries({ queryKey: ['meet', 'storage'] })
+      qc.invalidateQueries({ queryKey: ['meet', 'list'] })
+      try { host.notify({ kind: 'success', message: 'Структура хранения встреч создана' }) } catch (_) {}
+    } catch (e) {
+      try { host.notify({ kind: 'error', message: 'Ошибка: ' + ((e && e.message) || e) }) } catch (_) {}
+    } finally { setBusy(false) }
+  }
+  return jsxs('section', { className: 'st-card meet-storage', children: [
+    jsx('strong', { children: '📁 Где хранить встречи?' }),
+    jsx('div', { className: 'meet-storage-row', children: [
+      jsx('input', { className: 'meet-input', placeholder: (config && config.root) || 'Путь к папке встреч', value: root, onInput: (e) => setRoot(e.target.value) }),
+      jsx('button', { className: 'meet-btn primary', disabled: busy, onClick: create, children: busy ? 'Создаю…' : 'Создать структуру' }),
+    ] }),
+  ] })
+}
+
+function DiskStatus({ data }) {
+  if (!data) return null
+  return jsxs('div', { className: 'meet-disk' + (data.low_space ? ' danger' : ''), children: [
+    jsx('span', { children: '💾 ' + (data.meetings || 0) + ' встреч · ' + fmtBytes(data.used_bytes) + ' · свободно ' + (data.free_pct == null ? '—' : data.free_pct + '%') }),
+    data.low_space ? jsx('span', { children: '⚠ Мало места на диске — очистите старое' }) : null,
+  ] })
+}
+
 function MeetingsApp() {
   const { data: raw, isLoading, error } = useQuery({ queryKey: ['meet', 'list'], queryFn: async () => parseRest(await restGet('/meetings')), refetchInterval: 60000 })
+  const cfgQ = useQuery({ queryKey: ['meet', 'storage'], queryFn: () => restGet('/storage/config'), refetchInterval: 0 })
+  const diskQ = useQuery({ queryKey: ['meet', 'disk'], queryFn: () => restGet('/storage/status'), refetchInterval: 300000 })
   const [q, setQ] = useState('')
   const [typeF, setTypeF] = useState('all')
   const [openId, setOpenId] = useState(null)
@@ -418,6 +551,9 @@ function MeetingsApp() {
           jsx(UpdatePill, {}),
         ] }),
       ] }),
+
+      jsx(DiskStatus, { data: diskQ.data }),
+      cfgQ.data && !cfgQ.data.configured && !(meetings && meetings.length) ? jsx(StorageGate, { config: cfgQ.data, qc }) : null,
 
       meetings.length > 0 ? jsxs('div', { className: 'meet-tools', children: [
         jsx('div', { className: 'st-seg', children: [['all', 'Все']].concat(types.map((t) => [t, t])).map(([id, label]) => jsx('button', { className: typeF === id ? 'active' : '', onClick: () => setTypeF(id), children: label }, id)) }),
