@@ -20,7 +20,7 @@ const restCall = (path, opts) => {
 const UPD_BASE = { display:'inline-flex', alignItems:'center', gap:6, borderRadius:999, border:'1px solid var(--st-line, #e6e6e2)', background:'var(--st-surface, #fff)', color:'var(--st-muted, #6a6a6a)', fontSize:12, fontWeight:700, padding:'7px 12px', cursor:'pointer', fontFamily:'inherit', lineHeight:1, whiteSpace:'nowrap' }
 const UPD_ON = { borderColor:'var(--st-accent, #ff385c)', color:'#fff', background:'var(--st-accent, #ff385c)' }
 function useUpdateStatus() {
-  return useQuery({ queryKey: ['upd','status'], queryFn: () => restGet('/update/status'), refetchInterval: 6*3600*1000, retry: 0 })
+  return useQuery({ queryKey: ['upd','status','meeting'], queryFn: () => restGet('/update/status'), refetchInterval: 6*3600*1000, retry: 0 })
 }
 function UpdatePill() {
   const qc = useQueryClient()
