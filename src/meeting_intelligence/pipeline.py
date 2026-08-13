@@ -343,6 +343,7 @@ class TranscribeParams:
     output: Optional[Path] = None
     diarize: bool = False
     num_speakers: Optional[int] = None
+    recognize: bool = False
 
 
 @dataclass
@@ -399,6 +400,7 @@ class ProcessParams:
     participants: Optional[str] = None
     diarize: bool = False
     num_speakers: Optional[int] = None
+    recognize: bool = False
 
 
 @dataclass
@@ -429,7 +431,7 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
         extract_audio(src, audio)
     transcript, meta = transcribe_audio(
         audio, params.model, params.language, params.device, params.compute_type,
-        diarize=params.diarize, num_speakers=params.num_speakers,
+        diarize=params.diarize, num_speakers=params.num_speakers, recognize=params.recognize,
     )
     transcript = _clean_whisper_artifacts(transcript)
     out = params.output or (src.parent / f"{src.stem}.{NAMES_RU['transcript']}")
@@ -516,6 +518,7 @@ def process(params: ProcessParams) -> ProcessResult:
             compute_type=params.compute_type,
             diarize=params.diarize,
             num_speakers=params.num_speakers,
+            recognize=params.recognize,
         )
     )
     src = _resolve_source(params.source)

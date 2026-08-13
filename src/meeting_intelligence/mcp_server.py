@@ -22,6 +22,8 @@ if str(_src) not in sys.path:
 from mcp.server.fastmcp import FastMCP
 
 from . import pipeline
+from . import voiceprints
+from .transcribe import _load_diarization_pipeline, _wav_to_tensor
 from .pipeline import (
     ProcessParams,
     ProtocolParams,
@@ -46,6 +48,7 @@ def meeting_transcribe(
     compute_type: str = "int8",
     diarize: bool = False,
     num_speakers: int = 0,
+    recognize: bool = False,
     output: str = "",
 ) -> str:
     """Transcribe audio/video to a timestamped transcript file.
@@ -74,6 +77,7 @@ def meeting_transcribe(
                 output=Path(output) if output else None,
                 diarize=diarize,
                 num_speakers=(num_speakers or None),
+                recognize=recognize,
             )
         )
         return json.dumps(
@@ -197,6 +201,7 @@ def meeting_process(
     allow_cloud: bool = False,
     diarize: bool = False,
     num_speakers: int = 0,
+    recognize: bool = False,
 ) -> str:
     """Full pipeline: transcribe audio/video → translate → extract protocol.
 
@@ -230,6 +235,7 @@ def meeting_process(
                 allow_cloud=allow_cloud,
                 diarize=diarize,
                 num_speakers=(num_speakers or None),
+                recognize=recognize,
             )
         )
         return json.dumps(
@@ -245,6 +251,74 @@ def meeting_process(
         return _error_payload(int(exc.code) if exc.code is not None else 2, "")
     except (MeetingError, Exception) as exc:
         return _error_payload(2, str(exc))
+
+
+@mcp.tool()
+def meeting_enroll(
+    name: str,
+    sample: str = "",
+    meeting_audio: str = "",
+    speaker: int = 0,
+    device: str = "cuda",
+    num_speakers: int = 0,
+) -> str:
+    """Register a voiceprint for a person → automatic speaker recognition.
+
+    Two modes:
+      • sample: a standalone .wav of the person's voice (preferred for clean enrollment).
+      • meeting_audio + speaker: label cluster `speaker` (0-based) from a meeting's
+        diarization — the agent first runs meeting_transcribe(diarize=true), reads the
+        SPEAKER_NN labels, then enrolls the chosen one.
+
+    Args:
+        name: Person name (e.g. "Иван").
+        sample: Path to a standalone voice sample (.wav).
+        meeting_audio: Path to a meeting audio to label a speaker from.
+        speaker: Cluster index (0-based) when using meeting_audio.
+        device: cpu or cuda.
+        num_speakers: Optional speaker hint for the diarization (meeting_audio mode).
+
+    Returns:
+        JSON with ok/name/source/norm (or available speakers list on wrong cluster).
+    """
+    try:
+        if meeting_audio:
+            pipe = _load_diarization_pipeline(device)
+            wf, sr = _wav_to_tensor(Path(meeting_audio))
+            kw = {}
+            if num_speakers:
+                kw["num_speakers"] = int(num_speakers)
+            res = pipe({"waveform": wf, "sample_rate": sr}, **kw)
+            embs = getattr(res, "speaker_embeddings", None)
+            ann = getattr(res, "speaker_diarization", res)
+            labels = sorted([str(l) for l in ann.labels()])
+            label = "SPEAKER_{:02d}".format(int(speaker))
+            vec = voiceprints.embedding_for_cluster(embs, label) if embs is not None else None
+            if vec is None:
+                return json.dumps({"ok": False, "err": "speaker {} not found; available: {}".format(label, labels)}, ensure_ascii=False)
+            norm = voiceprints.save_voiceprint(name, vec)
+            return json.dumps({"ok": True, "name": name, "source": meeting_audio, "label": label, "available": labels, "norm": round(norm, 3)}, ensure_ascii=False)
+        elif sample:
+            wf, sr = _wav_to_tensor(Path(sample))
+            vec = voiceprints.compute_embedding(wf, sr, device)
+            norm = voiceprints.save_voiceprint(name, vec)
+            return json.dumps({"ok": True, "name": name, "source": sample, "norm": round(norm, 3)}, ensure_ascii=False)
+        return _error_payload(2, "specify sample or meeting_audio")
+    except SystemExit as exc:
+        return _error_payload(int(exc.code) if exc.code is not None else 2, "")
+    except (MeetingError, Exception) as exc:
+        return _error_payload(2, str(exc))
+
+
+@mcp.tool()
+def meeting_voiceprints() -> str:
+    """List registered voiceprints (person names available for recognition).
+
+    Returns:
+        JSON {count, names}.
+    """
+    vp = voiceprints.list_voiceprints()
+    return json.dumps({"count": len(vp), "names": list(vp.keys())}, ensure_ascii=False)
 
 
 def main() -> None:

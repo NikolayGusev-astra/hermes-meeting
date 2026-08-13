@@ -15,6 +15,9 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from . import voiceprints
+from .transcribe import _load_diarization_pipeline, _wav_to_tensor
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
@@ -183,6 +186,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             output=Path(args.output) if getattr(args, "output", None) else None,
             diarize=getattr(args, "diarize", False),
             num_speakers=getattr(args, "num_speakers", None),
+            recognize=getattr(args, "recognize", False),
         )
     )
     if _agent_mode_enabled():
@@ -232,9 +236,52 @@ def cmd_process(args: argparse.Namespace) -> int:
             participants=getattr(args, "participants", None),
             diarize=getattr(args, "diarize", False),
             num_speakers=getattr(args, "num_speakers", None),
+            recognize=getattr(args, "recognize", False),
         )
     )
     return 0 if result.valid else 3
+
+
+def cmd_enroll(args: argparse.Namespace) -> int:
+    name = args.name
+    if getattr(args, "meeting_audio", None):
+        pipe = _load_diarization_pipeline(args.device)
+        wf, sr = _wav_to_tensor(Path(args.meeting_audio))
+        kw = {}
+        if getattr(args, "num_speakers", None):
+            kw["num_speakers"] = int(args.num_speakers)
+        res = pipe({"waveform": wf, "sample_rate": sr}, **kw)
+        embs = getattr(res, "speaker_embeddings", None)
+        ann = getattr(res, "speaker_diarization", res)
+        labels = sorted([str(l) for l in ann.labels()])
+        label = "SPEAKER_{:02d}".format(int(args.speaker))
+        vec = voiceprints.embedding_for_cluster(embs, label) if embs is not None else None
+        if vec is None:
+            print(json.dumps({"ok": False, "err": "speaker {} not found; available: {}".format(label, labels)}, ensure_ascii=False))
+            return 2
+        norm = voiceprints.save_voiceprint(name, vec)
+        print(json.dumps({"ok": True, "name": name, "source": str(args.meeting_audio), "label": label, "available": labels, "norm": round(norm, 3)}, ensure_ascii=False))
+    elif getattr(args, "sample", None):
+        wf, sr = _wav_to_tensor(Path(args.sample))
+        vec = voiceprints.compute_embedding(wf, sr, args.device)
+        norm = voiceprints.save_voiceprint(name, vec)
+        print(json.dumps({"ok": True, "name": name, "source": str(args.sample), "norm": round(norm, 3)}, ensure_ascii=False))
+    else:
+        print(json.dumps({"ok": False, "err": "укажите <sample.wav> или --meeting-audio <wav> --speaker K"}, ensure_ascii=False))
+        return 2
+    return 0
+
+
+def cmd_voiceprints(args: argparse.Namespace) -> int:
+    vp = voiceprints.list_voiceprints()
+    print(json.dumps({"count": len(vp), "names": list(vp.keys())}, ensure_ascii=False))
+    return 0
+
+
+def cmd_unenroll(args: argparse.Namespace) -> int:
+    ok = voiceprints.remove_voiceprint(args.name)
+    print(json.dumps({"ok": ok, "name": args.name}, ensure_ascii=False))
+    return 0 if ok else 1
 
 
 def main() -> int:
@@ -250,6 +297,7 @@ def main() -> int:
     transcribe_p.add_argument("--output", type=Path, default=None)
     transcribe_p.add_argument("--diarize", action="store_true", default=False, help="Speaker diarization (pyannote, offline)")
     transcribe_p.add_argument("--num-speakers", type=int, default=None, help="Hint: exact number of speakers")
+    transcribe_p.add_argument("--recognize", action="store_true", default=False, help="Match speakers to voiceprint catalog")
 
     translate_p = sub.add_parser("translate")
     translate_p.add_argument("transcript", type=Path)
@@ -301,6 +349,19 @@ def main() -> int:
     process_p.add_argument("--output", type=Path, default=None)
     process_p.add_argument("--diarize", action="store_true", default=False, help="Speaker diarization (pyannote, offline)")
     process_p.add_argument("--num-speakers", type=int, default=None, help="Hint: exact number of speakers")
+    process_p.add_argument("--recognize", action="store_true", default=False, help="Match speakers to voiceprint catalog")
+
+    enroll_p = sub.add_parser("enroll", help="Register a voiceprint for speaker recognition")
+    enroll_p.add_argument("name", help="Person name")
+    enroll_p.add_argument("sample", nargs="?", default=None, help="Standalone voice sample (.wav)")
+    enroll_p.add_argument("--meeting-audio", default=None, help="Meeting audio to label a speaker from")
+    enroll_p.add_argument("--speaker", type=int, default=0, help="Cluster index (0-based) for --meeting-audio")
+    enroll_p.add_argument("--device", default="cuda")
+    enroll_p.add_argument("--num-speakers", type=int, default=None)
+
+    voiceprints_p = sub.add_parser("voiceprints", help="List registered voiceprints")
+    unenroll_p = sub.add_parser("unenroll", help="Remove a voiceprint")
+    unenroll_p.add_argument("name")
 
     # Web dashboard
     serve_p = sub.add_parser("serve", help="Launch the web dashboard")
@@ -330,6 +391,12 @@ def main() -> int:
             return cmd_protocol(args)
         if args.command == "process":
             return cmd_process(args)
+        if args.command == "enroll":
+            return cmd_enroll(args)
+        if args.command == "voiceprints":
+            return cmd_voiceprints(args)
+        if args.command == "unenroll":
+            return cmd_unenroll(args)
     except MeetingError as exc:
         fail(str(exc))
     fail("Unknown command")

@@ -54,14 +54,25 @@ def _load_diarization_pipeline(device: str):
     return pipe
 
 
-def _merge_speakers(segments, annotation) -> list:
-    """Каждому сегменту Whisper — спикер pyannote с макс. перекрытием по времени."""
+def _merge_speakers(segments, annotation, label_map=None) -> list:
+    """Каждому сегменту Whisper — спикер pyannote с макс. перекрытием по времени.
+
+    Если задан label_map (label -> имя), узнанные спикеры получают имена вместо SPEAKER_NN.
+    """
     turns = list(annotation.itertracks(yield_label=True))  # (Segment, track, label)
     label_order: list = []
     for _seg, _track, label in turns:
         if label not in label_order:
             label_order.append(label)
     label_to_num = {lab: "SPEAKER_{:02d}".format(i) for i, lab in enumerate(label_order)}
+
+    def _display(label):
+        if label_map:
+            nm = label_map.get(str(label))
+            if nm:
+                return nm
+        return label_to_num.get(label, "SPEAKER_00")
+
     out = []
     prev = "SPEAKER_00"
     for item in segments:
@@ -75,9 +86,7 @@ def _merge_speakers(segments, annotation) -> list:
             if dur > best_dur:
                 best_dur = dur
                 best = label
-        spk = label_to_num.get(best) if best is not None else None
-        if spk is None:
-            spk = prev
+        spk = _display(best) if best is not None else prev
         prev = spk
         new = dict(item)
         new["speaker_id"] = spk
@@ -111,7 +120,7 @@ def _wav_to_tensor(path: Path):
     return torch.from_numpy(data).unsqueeze(0), sr
 
 
-def _diarize_speakers(segments, audio: Path, device: str, num_speakers=None) -> list:
+def _diarize_speakers(segments, audio: Path, device: str, num_speakers=None, recognize=False) -> list:
     pipe = _load_diarization_pipeline(device)
     waveform, sr = _wav_to_tensor(audio)
     kwargs = {}
@@ -120,12 +129,33 @@ def _diarize_speakers(segments, audio: Path, device: str, num_speakers=None) -> 
     result = pipe({"waveform": waveform, "sample_rate": sr}, **kwargs)
     # pyannote 4.x возвращает DiarizeOutput (.speaker_diarization); 3.x — Annotation
     annotation = getattr(result, "speaker_diarization", result)
-    return _merge_speakers(segments, annotation)
+    label_map = None
+    if recognize:
+        try:
+            from . import voiceprints as _vp
+            embs = getattr(result, "speaker_embeddings", None)
+            label_map = {}
+            n_hit = 0
+            for label in annotation.labels():
+                name = None
+                vec = _vp.embedding_for_cluster(embs, label) if embs is not None else None
+                if vec is not None:
+                    hit = _vp.recognize(vec)
+                    if hit:
+                        name = hit[0]
+                        n_hit += 1
+                        log.info("Voice match: %s -> %s (%.2f)", label, name, hit[1])
+                label_map[str(label)] = name
+            log.info("Voice recognition: %d/%d speakers recognized", n_hit, len(label_map))
+        except Exception as exc:
+            log.warning("Voice recognition failed (%s) — keeping SPEAKER_NN labels.", exc)
+            label_map = None
+    return _merge_speakers(segments, annotation, label_map)
 
 
 def transcribe_audio(
     audio: Path, model: str, language: Optional[str], device: str, compute_type: str,
-    diarize: bool = False, num_speakers: Optional[int] = None,
+    diarize: bool = False, num_speakers: Optional[int] = None, recognize: bool = False,
 ) -> Tuple[str, dict]:
     from faster_whisper import WhisperModel
 
@@ -189,7 +219,7 @@ def transcribe_audio(
     diarization_used = "silence-gap"
     if diarize:
         try:
-            enriched = _diarize_speakers(segments, audio, device, num_speakers)
+            enriched = _diarize_speakers(segments, audio, device, num_speakers, recognize=recognize)
             nspk = len({x["speaker_id"] for x in enriched})
             log.info("Diarization: %d speakers via pyannote", nspk)
             diarization_used = "pyannote ({:d} speakers)".format(nspk)
