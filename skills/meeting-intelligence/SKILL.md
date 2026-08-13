@@ -80,6 +80,21 @@ hints the exact count (improves clustering). Use `diarize=true` whenever the sou
 is a meeting/interview with 2+ speakers; for a single-speaker lecture it's optional.
 Falls back to the silence-gap heuristic automatically if pyannote is unavailable.
 
+### Voice recognition (enrollment → auto names)
+
+Diarization gives distinct voice clusters (SPEAKER_00..NN) but not names. To get
+**names automatically**, register voiceprints once, then pass `recognize=true`:
+- `meeting enroll <Name> <sample.wav>` — from a standalone voice sample, OR
+- `meeting enroll <Name> --meeting-audio <meeting.wav> --speaker K` — label cluster K
+  of a meeting you already diarized (read the SPEAKER_NN labels first).
+- `meeting voiceprints` lists registered names; `meeting unenroll <Name>` removes one.
+
+Catalog: `$HERMES_HOME/meeting-voiceprints.json` (256-d wespeaker embeddings, cosine
+match, threshold ~0.5). With `recognize=true` on transcribe/process, each matched
+cluster gets its enrolled name; unmatched clusters keep `SPEAKER_NN`. Use when you
+have recurring participants (team meetings) — enroll each person once.
+
+
 ## Tool: meeting_agent_transcript
 
 Clean a saved transcript for agent analysis. This is local preprocessing only and never calls an LLM.
