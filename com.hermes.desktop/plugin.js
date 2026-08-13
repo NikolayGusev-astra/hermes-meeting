@@ -83,7 +83,9 @@ const MEETING_PROMPT = (src, opts) => {
 const openMeetingSession = async (src, opts, knownMeetings) => {
   const short = (String(src || '').trim().split(/[\\/]/).pop() || 'материал').slice(0, 60)
   try {
-    const sid = await host.request('session.create', { source: 'desktop', title: 'Встреча: ' + short })
+    const created = await host.request('session.create', { source: 'desktop', title: 'Встреча: ' + short })
+    const sid = created && (created.session_id || created.stored_session_id || (created.session && created.session.id) || created.id)
+    if (!sid) throw new Error('session.create вернул пустой id')
     try { await host.request('prompt.submit', { session_id: sid, text: MEETING_PROMPT(src, opts) }) } catch (_) {}
     savePending({ sid: String(sid), src: String(src).slice(0, 120), name: short, startedAt: Date.now(), known: Array.isArray(knownMeetings) ? knownMeetings.slice(0, 200) : [] })
     try { host.notify({ kind: 'success', message: 'Пайплайн запущен — транскрипция и анализ пошли. Прогресс виден ниже.' }) } catch (_) {}
