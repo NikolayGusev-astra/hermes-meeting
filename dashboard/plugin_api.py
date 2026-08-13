@@ -10,6 +10,7 @@ C:\\Work\\Assist\\meeting) и возвращает список обработа
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -152,3 +153,70 @@ def get_meeting_file(name: str, filename: str):
         raise HTTPException(status_code=404, detail="file not found")
 
     return FileResponse(str(target), filename=safe_file)
+
+
+# ── Обновление плагина: git-чек + ре-деплой виджета ─────────────────────
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _git_update_status(root):
+    """Проверить git-remote на новые коммиты (с git fetch)."""
+    def _g(*args):
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=20, stdin=subprocess.DEVNULL)
+    try:
+        _g("fetch", "-q")
+    except Exception:
+        pass
+    try:
+        cur = _g("rev-parse", "--short", "HEAD").stdout.strip() or "?"
+        bo = _g("rev-list", "--count", "HEAD..@{u}")
+        behind = int(bo.stdout.strip()) if (bo.returncode == 0 and bo.stdout.strip().isdigit()) else 0
+        log = []
+        if behind > 0:
+            lg = _g("log", "--oneline", "-5", "HEAD..@{u}")
+            log = [ln for ln in lg.stdout.splitlines() if ln.strip()]
+        return {"current": cur, "behind": behind, "updates_available": behind > 0, "log": log}
+    except Exception as e:
+        return {"current": "?", "behind": 0, "updates_available": False, "log": [], "error": str(e)}
+
+
+@router.get("/update/status")
+def update_status():
+    """Есть ли новые коммиты в git-remote (с git fetch)."""
+    return _git_update_status(_PLUGIN_ROOT)
+
+
+@router.post("/update/redeploy")
+def update_redeploy():
+    """Пере-деплой desktop-виджета после pull (hermes plugins update не копирует виджет)."""
+    script = _PLUGIN_ROOT / "scripts" / "deploy-desktop-plugin.sh"
+    if not script.exists():
+        return {"ok": False, "err": "scripts/deploy-desktop-plugin.sh not found"}
+    try:
+        r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=90, stdin=subprocess.DEVNULL)
+        return {"ok": r.returncode == 0, "rc": r.returncode,
+                "stdout": (r.stdout or "")[-800:], "stderr": (r.stderr or "")[-400:]}
+    except Exception as e:
+        return {"ok": False, "err": str(e)}
+
+
+@router.post("/update/apply")
+def update_apply():
+    """git pull --autostash + ре-деплой виджета (обновление одним запросом)."""
+    r = subprocess.run(["git", "-C", str(_PLUGIN_ROOT), "pull", "--ff-only", "--autostash"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=120, stdin=subprocess.DEVNULL)
+    pulled_ok = r.returncode == 0
+    redeployed = False
+    script = _PLUGIN_ROOT / "scripts" / "deploy-desktop-plugin.sh"
+    if script.exists():
+        try:
+            rd = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=90, stdin=subprocess.DEVNULL)
+            redeployed = rd.returncode == 0
+        except Exception:
+            pass
+    return {"ok": pulled_ok, "redeployed": redeployed,
+            "stdout": (r.stdout or "")[-600:], "stderr": (r.stderr or "")[-300:]}

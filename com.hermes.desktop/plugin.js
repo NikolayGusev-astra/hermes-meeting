@@ -11,6 +11,44 @@ const restGet = (path) => {
   if (!_ctx) return Promise.reject(new Error('plugin context not ready'))
   return _ctx.rest(path)
 }
+const restCall = (path, opts) => {
+  if (!_ctx) return Promise.reject(new Error('plugin context not ready'))
+  return _ctx.rest(path, opts)
+}
+
+// ── Проверка обновлений плагина (git) + кнопка «Обновить» ──────────────
+const UPD_BASE = { display:'inline-flex', alignItems:'center', gap:6, borderRadius:999, border:'1px solid var(--st-line, #e6e6e2)', background:'var(--st-surface, #fff)', color:'var(--st-muted, #6a6a6a)', fontSize:12, fontWeight:700, padding:'7px 12px', cursor:'pointer', fontFamily:'inherit', lineHeight:1, whiteSpace:'nowrap' }
+const UPD_ON = { borderColor:'var(--st-accent, #ff385c)', color:'#fff', background:'var(--st-accent, #ff385c)' }
+function useUpdateStatus() {
+  return useQuery({ queryKey: ['upd','status'], queryFn: () => restGet('/update/status'), refetchInterval: 6*3600*1000, retry: 0 })
+}
+function UpdatePill() {
+  const qc = useQueryClient()
+  const q = useUpdateStatus()
+  const [busy, setBusy] = useState(false)
+  const d = (q.data && typeof q.data === 'object') ? q.data : null
+  const behind = (d && Number(d.behind)) || 0
+  const ua = !!(d && d.updates_available)
+  const apply = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await restCall('/update/apply', { method: 'POST' })
+      const ok = !!(r && r.ok)
+      try { host.notify({ kind: ok ? 'success' : 'error', message: ok ? 'Готово — перезапустите Hermes (⌘Q / Ctrl+K → Reload desktop plugins).' : 'Обновление не удалось: ' + ((r && (r.stderr || r.stdout)) || 'см. лог') }) } catch (_) {}
+      qc.invalidateQueries({ queryKey: ['upd','status'] })
+    } catch (e) { try { host.notify({ kind:'error', message:'Ошибка: '+((e&&e.message)||e) }) } catch(_) {} }
+    finally { setBusy(false) }
+  }
+  if (q.isLoading) return jsx('span', { style: UPD_BASE, title: 'Проверка обновлений…', children: '↻' })
+  return jsx('button', {
+    style: Object.assign({}, UPD_BASE, ua ? UPD_ON : null, busy ? { opacity:.6 } : null),
+    title: ua ? ('Доступно обновлений: '+behind+(d&&d.log&&d.log.length?'\n'+d.log.join('\n'):'')) : 'Обновлений нет — клик чтобы перепроверить',
+    onClick: () => ua ? apply() : qc.invalidateQueries({ queryKey: ['upd','status'] }),
+    disabled: busy,
+    children: busy ? '↻…' : (ua ? ('↻ Обновить'+(behind?(' ('+behind+')'):'')) : '↻')
+  })
+}
 
 // ctx.rest() возвращает уже распарсенный объект (FastAPI auto-serializes) либо { result: "..." }.
 const parseRest = (r) => {
@@ -307,6 +345,7 @@ function MeetingsApp() {
         ] }),
         jsxs('div', { className: 'meet-pills', children: [
           jsxs('span', { className: 'meet-pill', children: [jsx('i', { className: 'st-dot good' }), meetings.length + ' ' + plural(meetings.length, 'встреча', 'встречи', 'встреч')] }),
+          jsx(UpdatePill, {}),
         ] }),
       ] }),
 
