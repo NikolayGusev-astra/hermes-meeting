@@ -181,6 +181,8 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             device=args.device,
             compute_type=args.compute_type,
             output=Path(args.output) if getattr(args, "output", None) else None,
+            diarize=getattr(args, "diarize", False),
+            num_speakers=getattr(args, "num_speakers", None),
         )
     )
     if _agent_mode_enabled():
@@ -228,6 +230,8 @@ def cmd_process(args: argparse.Namespace) -> int:
             docx=args.docx,
             allow_cloud=args.allow_cloud,
             participants=getattr(args, "participants", None),
+            diarize=getattr(args, "diarize", False),
+            num_speakers=getattr(args, "num_speakers", None),
         )
     )
     return 0 if result.valid else 3
@@ -244,6 +248,8 @@ def main() -> int:
     transcribe_p.add_argument("--device", default=TRANSCRIBE_DEVICE)
     transcribe_p.add_argument("--compute-type", default=TRANSCRIBE_COMPUTE)
     transcribe_p.add_argument("--output", type=Path, default=None)
+    transcribe_p.add_argument("--diarize", action="store_true", default=False, help="Speaker diarization (pyannote, offline)")
+    transcribe_p.add_argument("--num-speakers", type=int, default=None, help="Hint: exact number of speakers")
 
     translate_p = sub.add_parser("translate")
     translate_p.add_argument("transcript", type=Path)
@@ -293,6 +299,8 @@ def main() -> int:
         "--participants", default=None, help="SPEAKER_00=Name,SPEAKER_01=Name,..."
     )
     process_p.add_argument("--output", type=Path, default=None)
+    process_p.add_argument("--diarize", action="store_true", default=False, help="Speaker diarization (pyannote, offline)")
+    process_p.add_argument("--num-speakers", type=int, default=None, help="Hint: exact number of speakers")
 
     # Web dashboard
     serve_p = sub.add_parser("serve", help="Launch the web dashboard")

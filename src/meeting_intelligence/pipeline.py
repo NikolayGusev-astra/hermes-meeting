@@ -341,6 +341,8 @@ class TranscribeParams:
     device: str = "cpu"
     compute_type: str = "int8"
     output: Optional[Path] = None
+    diarize: bool = False
+    num_speakers: Optional[int] = None
 
 
 @dataclass
@@ -395,6 +397,8 @@ class ProcessParams:
     docx: bool = False
     allow_cloud: bool = False
     participants: Optional[str] = None
+    diarize: bool = False
+    num_speakers: Optional[int] = None
 
 
 @dataclass
@@ -424,7 +428,8 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
     if audio != src:
         extract_audio(src, audio)
     transcript, meta = transcribe_audio(
-        audio, params.model, params.language, params.device, params.compute_type
+        audio, params.model, params.language, params.device, params.compute_type,
+        diarize=params.diarize, num_speakers=params.num_speakers,
     )
     transcript = _clean_whisper_artifacts(transcript)
     out = params.output or (src.parent / f"{src.stem}.{NAMES_RU['transcript']}")
@@ -509,6 +514,8 @@ def process(params: ProcessParams) -> ProcessResult:
             language=params.language,
             device=params.device,
             compute_type=params.compute_type,
+            diarize=params.diarize,
+            num_speakers=params.num_speakers,
         )
     )
     src = _resolve_source(params.source)

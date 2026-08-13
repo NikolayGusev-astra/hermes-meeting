@@ -44,6 +44,8 @@ def meeting_transcribe(
     language: str = "en",
     device: str = "cpu",
     compute_type: str = "int8",
+    diarize: bool = False,
+    num_speakers: int = 0,
     output: str = "",
 ) -> str:
     """Transcribe audio/video to a timestamped transcript file.
@@ -54,6 +56,8 @@ def meeting_transcribe(
         language: Source language code (en, ru, de, ...).
         device: cpu or cuda.
         compute_type: Whisper compute type (int8, float16, ...).
+        diarize: Enable speaker diarization (pyannote, offline; groups real speakers).
+        num_speakers: Optional exact number of speakers (helps clustering); 0 = auto.
         output: Optional output file path.
 
     Returns:
@@ -68,6 +72,8 @@ def meeting_transcribe(
                 device=device,
                 compute_type=compute_type,
                 output=Path(output) if output else None,
+                diarize=diarize,
+                num_speakers=(num_speakers or None),
             )
         )
         return json.dumps(
@@ -189,6 +195,8 @@ def meeting_process(
     skip_translate: bool = False,
     docx: bool = False,
     allow_cloud: bool = False,
+    diarize: bool = False,
+    num_speakers: int = 0,
 ) -> str:
     """Full pipeline: transcribe audio/video → translate → extract protocol.
 
@@ -220,6 +228,8 @@ def meeting_process(
                 skip_translate=skip_translate,
                 docx=docx,
                 allow_cloud=allow_cloud,
+                diarize=diarize,
+                num_speakers=(num_speakers or None),
             )
         )
         return json.dumps(
