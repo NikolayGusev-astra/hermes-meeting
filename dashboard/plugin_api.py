@@ -9,14 +9,16 @@ C:\\Work\\Assist\\meeting) и возвращает список обработа
 """
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 # ── FastAPI (defensive: allow import for unit tests without dashboard deps) ──
 try:
-    from fastapi import APIRouter, HTTPException
+    from fastapi import APIRouter, Body, HTTPException
     from fastapi.responses import FileResponse
 except Exception:  # Allows local unit tests without dashboard dependencies.
     class APIRouter:  # type: ignore
@@ -37,40 +39,78 @@ except Exception:  # Allows local unit tests without dashboard dependencies.
             raise RuntimeError("fastapi.responses.FileResponse unavailable")
 
 
-# Корень с обработанными встречами. Переопределяется через MEETING_ROOT (например,
-# при переносе на другой диск). По умолчанию — стандартная рабочая папка проекта.
+def _hermes_home() -> Path:
+    return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+
+
+def _storage_config_path() -> Path:
+    return _hermes_home() / "meeting-storage.json"
+
+
+def load_storage_config() -> dict:
+    try:
+        p = _storage_config_path()
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:
+        return {}
+
+
+def save_storage_config(root: str) -> dict:
+    cfg = {"root": str(root)}
+    p = _storage_config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return cfg
+
+
+# Корень с обработанными встречами: конфиг (storage/config) > MEETING_ROOT env > дефолт.
 def _meeting_root() -> Path:
-    root = os.environ.get("MEETING_ROOT", r"C:\Work\Assist\meeting")
-    return Path(root)
+    cfg = load_storage_config()
+    if cfg.get("root"):
+        return Path(cfg["root"])
+    return Path(os.environ.get("MEETING_ROOT", r"C:\Work\Assist\meeting"))
 
 
 _OUTPUT_EXTS = {".docx", ".xlsx", ".pdf"}
 _TRANSCRIPT_EXTS = {".txt"}
+_AUDIO_VIDEO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".mp4", ".mkv", ".mov", ".webm"}
 _IGNORE = {"generate_docs.py", "part1.transcript.transcript.json", "part2.transcript.transcript.json"}
 
 
 def _artifact(file: Path) -> dict:
     ext = file.suffix.lower()
-    kind = "docx" if ext in (".docx", ".xlsx", ".pdf") else ("txt" if ext == ".txt" else "other")
+    if ext in (".docx", ".xlsx", ".pdf"):
+        kind = "docx"
+    elif ext == ".txt":
+        kind = "txt"
+    elif ext in _AUDIO_VIDEO_EXTS:
+        kind = "original"
+    else:
+        kind = "other"
+    try:
+        subdir = file.parent.name if file.parent.name != file.parent.parent.name else ""
+    except Exception:
+        subdir = ""
     return {
         "file": file.name,
         "kind": kind,
         "ext": ext.lstrip("."),
         "path": str(file),
         "size": file.stat().st_size,
+        "subdir": subdir,
     }
 
 
 def _meeting_dir(dirpath: Path) -> dict | None:
-    """Собрать карточку встречи из каталога (только если в нём есть выходные артефакты)."""
+    """Собрать карточку встречи из каталога (рекурсивно; только если есть артефакты)."""
     try:
-        files = [p for p in dirpath.iterdir() if p.is_file()]
+        files = [p for p in dirpath.rglob("*") if p.is_file()]
     except OSError:
         return None
-    artifacts = [_artifact(f) for f in files if f.name not in _IGNORE and f.suffix.lower() in (_OUTPUT_EXTS | _TRANSCRIPT_EXTS)]
+    artifacts = [_artifact(f) for f in files if f.name not in _IGNORE and f.suffix.lower() in (_OUTPUT_EXTS | _TRANSCRIPT_EXTS | _AUDIO_VIDEO_EXTS)]
     if not artifacts:
         return None
-    artifacts.sort(key=lambda a: (a["kind"] != "docx" and a["kind"] != "xlsx", a["file"]))
+    artifacts.sort(key=lambda a: (a["kind"] == "original", a["kind"] == "txt", a["file"]))
     return {
         "name": dirpath.name,
         "date": dirpath.name[:10] if len(dirpath.name) >= 10 else "",
@@ -119,6 +159,65 @@ def get_meeting(name: str):
 def get_state():
     """Псевдоним list_meetings — один запрос для UI-дашборда."""
     return list_meetings()
+
+
+@router.get("/storage/config")
+def storage_config_get():
+    """Текущий корень хранилища (config > MEETING_ROOT env > дефолт) + каталог спикеров."""
+    cfg = load_storage_config()
+    root = _meeting_root()
+    return {"configured": bool(cfg.get("root")), "root": str(root), "speakers_dir": str(root / "speakers")}
+
+
+@router.post("/storage/config")
+def storage_config_set(body: dict = Body(default={})):
+    """Выбрать корень хранилища и создать структуру (каталог speakers/ — глобальные профили).
+
+    Per-meeting структура (оригинал/транскрипция/документы) создаётся при обработке
+    каждой встречи агентом; здесь — только корень + глобальный speakers/.
+    """
+    root = str((body or {}).get("root", "")).strip()
+    if not root:
+        raise HTTPException(status_code=400, detail="root required")
+    root_path = Path(root)
+    root_path.mkdir(parents=True, exist_ok=True)
+    (root_path / "speakers").mkdir(exist_ok=True)
+    cfg = save_storage_config(str(root_path))
+    return {"ok": True, **cfg, "speakers_dir": str(root_path / "speakers")}
+
+
+@router.get("/storage/status")
+def storage_status():
+    """Сводка по размеру встреч + свободное место (предупреждение при <15%)."""
+    root = _meeting_root()
+    used = 0
+    meetings = 0
+    if root.exists():
+        for child in root.iterdir():
+            if child.is_dir():
+                meetings += 1
+                for f in child.rglob("*"):
+                    try:
+                        if f.is_file():
+                            used += f.stat().st_size
+                    except OSError:
+                        pass
+    try:
+        du = shutil.disk_usage(str(root))
+        total, free = du.total, du.free
+        free_pct = round(100 * free / total, 1) if total else None
+    except Exception:
+        total = free = 0
+        free_pct = None
+    return {
+        "root": str(root),
+        "meetings": meetings,
+        "used_bytes": used,
+        "total_bytes": total,
+        "free_bytes": free,
+        "free_pct": free_pct,
+        "low_space": (free_pct is not None and free_pct < 15),
+    }
 
 
 def _safe_within(child: Path, root: Path) -> bool:

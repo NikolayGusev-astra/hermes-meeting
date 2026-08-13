@@ -339,7 +339,34 @@ When the user explicitly asks (e.g. "создай задачи в Jira", "про
 | **Email** | Send protocol to participants |
 | **Calendar** | Verify meeting time; find next available slots |
 
-## Environment
+## Storage & speaker profiles
+
+Output root is configurable (desktop `POST /storage/config`, else `MEETING_ROOT` env,
+else default). The dashboard scans this root; `GET /storage/status` reports size and
+free-disk warning at <15%.
+
+When you finish processing a meeting, **organize outputs into a per-meeting folder**:
+```
+<root>/<дата>_<тип>_<тема>/
+  original/        ← скопировать исходник (файл или скачанное из URL; не терять!)
+  transcription/   ← транскрипт.txt (+ .translated.txt) + <name>.meta.json
+  documents/       ← Протокол.docx, Саммари.docx, аналитика, реестры (.docx/.xlsx)
+```
+And write `transcription/<name>.meta.json` so the speaker-audio player + future re-runs
+can find the original anywhere it lives:
+```json
+{"source_path": "<путь или ссылка на исходник>", "processed_at": "ISO",
+ "duration": 1234.5, "stt_model": "small", "diarization": "pyannote (3 speakers)",
+ "speakers": ["SPEAKER_00", "Иван"]}
+```
+
+**Speaker profiles** (manual labeling in the dashboard, or via `meeting_enroll`) are stored
+globally in `<root>/speakers/`: `speakers.json` = `{short: {full_name, role, contact, voiceprint}}`,
+plus one `<short>.md` per person (frontmatter title/tags + profile body) — ready for the
+optional llm-wiki/auto-rag index. Voiceprints feed back into `recognize=true` so recurring
+participants are auto-named on future meetings.
+
+
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
