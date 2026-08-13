@@ -62,12 +62,23 @@ Audio/Video → meeting_transcribe → transcript.txt → meeting_agent_transcri
 
 Transcribe audio/video to timestamped transcript. Local Whisper, no cloud.
 
-Input: `source` (required), `model=small`, `language=en`, `device=cpu`
+Input: `source` (required), `model=small`, `language=en`, `device=cpu`, `diarize=false`, `num_speakers=0`
 Output: `<source>.transcript.txt` — lines formatted as `[timestamp] SPEAKER_NN | text`
 
 Post-processing built in:
 - Garbage filter: strips Whisper hallucination runs (5+ single-char tokens)
 - Segment IDs removed for cleaner LLM input
+
+### Speaker diarization (`diarize=true`)
+
+By default `SPEAKER_NN` labels come from a cheap silence-gap heuristic (unreliable —
+one speaker with pauses gets split into many). For **real multi-speaker meetings**
+pass `diarize=true` (CLI `--diarize`): pyannote SpeakerDiarization runs offline on
+GPU (models bundled in `models/pyannote/`, no internet/token needed) and assigns
+each Whisper segment to the actual speaker by voice. Optionally `num_speakers=N`
+hints the exact count (improves clustering). Use `diarize=true` whenever the source
+is a meeting/interview with 2+ speakers; for a single-speaker lecture it's optional.
+Falls back to the silence-gap heuristic automatically if pyannote is unavailable.
 
 ## Tool: meeting_agent_transcript
 
