@@ -80,18 +80,24 @@ const MEETING_PROMPT = (src, opts) => {
   if (o.language && o.language !== 'auto') parts.push('Язык исходника: ' + o.language + '.')
   return parts.join(' ')
 }
-const openMeetingSession = async (src, opts) => {
+const openMeetingSession = async (src, opts, knownMeetings) => {
   const short = (String(src || '').trim().split(/[\\/]/).pop() || 'материал').slice(0, 60)
   try {
     const sid = await host.request('session.create', { source: 'desktop', title: 'Встреча: ' + short })
     try { await host.request('prompt.submit', { session_id: sid, text: MEETING_PROMPT(src, opts) }) } catch (_) {}
-    try { host.notify({ kind: 'success', message: 'Сессия запущена — транскрипция и анализ пошли.' }) } catch (_) {}
-    return true
+    savePending({ sid: String(sid), src: String(src).slice(0, 120), name: short, startedAt: Date.now(), known: Array.isArray(knownMeetings) ? knownMeetings.slice(0, 200) : [] })
+    try { host.notify({ kind: 'success', message: 'Пайплайн запущен — транскрипция и анализ пошли. Прогресс виден ниже.' }) } catch (_) {}
+    return String(sid)
   } catch (e) {
     try { host.notify({ kind: 'error', message: 'Не удалось открыть сессию: ' + ((e && e.message) || e) }) } catch (_) {}
-    return false
+    return null
   }
 }
+const PJ_KEY = 'meet.pendingJob'
+const loadPending = () => { try { const j = JSON.parse(localStorage.getItem(PJ_KEY) || 'null'); return (j && j.sid && j.startedAt) ? j : null } catch (_) { return null } }
+const savePending = (j) => { try { localStorage.setItem(PJ_KEY, JSON.stringify(j)) } catch (_) {} }
+const clearPending = () => { try { localStorage.removeItem(PJ_KEY) } catch (_) {} }
+const fmtElapsed = (ms) => { const s = Math.max(0, Math.floor((ms || 0) / 1000)); const m = Math.floor(s / 60); return m > 0 ? (m + 'м ' + (s % 60) + 'с') : (s + 'с') }
 
 // ── helpers ──
 const fmtRu = (d) => {
@@ -228,6 +234,15 @@ const CSS = `
 .meet-process-adv select{min-height:30px;border:1px solid var(--st-line);border-radius:7px;padding:0 8px;font-family:inherit;font-size:12px;background:#fff}
 .meet-chk{cursor:pointer}
 .meet-process-hint{margin:10px 0 0;color:var(--st-subtle);font-size:11px;line-height:1.5}
+.meet-prog{margin-bottom:14px;padding:13px 16px;border:1px solid var(--st-accent,#6c5ce7);border-radius:12px;background:linear-gradient(135deg,#f6f4ff,#fff)}
+.meet-prog-done{border-color:var(--st-good,#17835b);background:linear-gradient(135deg,#eaf7f1,#fff)}
+.meet-prog-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px}
+.meet-prog-spin{flex:0 0 auto;width:14px;height:14px;border:2px solid #e8e4ff;border-top-color:var(--st-accent,#6c5ce7);border-radius:50%;animation:meet-spin .8s linear infinite}
+.meet-prog-bar{height:6px;border-radius:99px;background:var(--st-soft,#f2f2ef);overflow:hidden;position:relative}
+.meet-prog-bar i{position:absolute;top:0;height:100%;width:40%;border-radius:inherit;background:var(--st-accent,#6c5ce7);animation:meet-slide 1.1s ease-in-out infinite}
+.meet-prog-meta{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11px;color:var(--st-muted,#6a6a6a);flex-wrap:wrap}
+@keyframes meet-spin{to{transform:rotate(360deg)}}
+@keyframes meet-slide{0%{left:-40%}100%{left:100%}}
 `
 
 const THEME_COLORS = {
@@ -282,7 +297,7 @@ function MeetingCard({ m, expanded, onToggle }) {
 
 // ───────────────────────────────── main ─────────────────────────────────
 // ── Форма запуска пайплайна (путь/ссылка → сессия агента с skill) ──
-function ProcessForm({ onDone }) {
+function ProcessForm({ onDone, knownMeetings }) {
   const [src, setSrc] = useState('')
   const [lang, setLang] = useState('auto')
   const [translate, setTranslate] = useState(true)
@@ -293,9 +308,9 @@ function ProcessForm({ onDone }) {
     const s = src.trim()
     if (!s || busy) return
     setBusy(true)
-    const ok = await openMeetingSession(s, { language: lang, translate, cloud })
+    const sid = await openMeetingSession(s, { language: lang, translate, cloud }, knownMeetings)
     setBusy(false)
-    if (ok) { setSrc(''); onDone && onDone() }
+    if (sid) { setSrc(''); onDone && onDone(sid) }
   }
   return jsxs('div', { className: 'meet-process', children: [
     jsxs('div', { className: 'meet-process-row', children: [
@@ -311,6 +326,48 @@ function ProcessForm({ onDone }) {
       ] }) : null,
     ] }),
     jsx('p', { className: 'meet-process-hint', children: 'Агент транскрибирует (Whisper; URL→yt-dlp), извлечёт протокол/саммари/аналитику и сохранит артефакты в папку встречи. Список ниже обновится сам (рефреш 60 с).' }),
+  ] })
+}
+
+// ── Панель прогресса пайплайна (показывает, что обработка идёт) ──
+const PROG_STAGES = ['Определяем тип контента и язык…', 'Транскрибируем аудио (Whisper)…', 'Переводим транскрипт…', 'Извлекаем протокол и артефакты…', 'Финализируем документы…']
+function ProgressPanel({ meetings }) {
+  const [job, setJob] = useState(loadPending)
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const t = setInterval(() => { setNow(Date.now()); setJob(loadPending()) }, 1000)
+    return () => clearInterval(t)
+  }, [])
+  const known = (job && job.known) || []
+  const appeared = job ? (meetings || []).filter((m) => m && m.name && !known.includes(m.name)).map((m) => m.name) : []
+  const done = appeared.length > 0
+  useEffect(() => {
+    if (!done) return
+    const t = setTimeout(() => { clearPending(); setJob(null) }, 8000)
+    return () => clearTimeout(t)
+  }, [done])
+  if (!job) return null
+  const elapsed = fmtElapsed(now - (job.startedAt || now))
+  const stageIdx = Math.min(PROG_STAGES.length - 1, Math.floor((now - (job.startedAt || now)) / 30000))
+  const open = () => { try { host.request('session.activate', { session_id: job.sid }) } catch (_) {} try { host.navigate('/session/' + encodeURIComponent(job.sid)) } catch (_) {} }
+  if (done) return jsxs('div', { className: 'meet-prog meet-prog-done', children: [
+    jsx('div', { className: 'meet-prog-head', children: jsx('strong', { children: '✓ Готово — встреча появилась в списке' }) }),
+    appeared.length ? jsx('div', { style: { fontSize: 12, color: 'var(--st-muted)' }, children: appeared.join(', ') }) : null,
+    jsxs('div', { className: 'meet-prog-meta', children: ['⏱ ' + elapsed, jsx('button', { className: 'st-copy-btn', style: { marginLeft: 'auto' }, onClick: () => { clearPending(); setJob(null) }, children: 'скрыть' })] }),
+  ] })
+  return jsxs('div', { className: 'meet-prog', children: [
+    jsxs('div', { className: 'meet-prog-head', children: [
+      jsx('span', { className: 'meet-prog-spin' }),
+      jsx('strong', { children: 'Обработка:' }),
+      jsx('span', { className: 'st-selectable', style: { color: 'var(--st-muted)', fontSize: 12 }, children: job.name }),
+    ] }),
+    jsx('div', { className: 'meet-prog-bar', children: jsx('i', {}) }),
+    jsxs('div', { className: 'meet-prog-meta', children: [
+      jsx('span', { children: '⏱ ' + elapsed }),
+      jsx('span', { style: { color: 'var(--st-subtle)' }, children: PROG_STAGES[stageIdx] }),
+      jsx('button', { className: 'st-copy-btn', style: { marginLeft: 'auto' }, onClick: open, title: 'Открыть сессию агента (реальный прогресс в чате)', children: 'открыть сессию' }),
+      jsx('button', { className: 'st-copy-btn', onClick: () => { clearPending(); setJob(null) }, title: 'Скрыть панель (обработка продолжится в сессии)', children: '✕' }),
+    ] }),
   ] })
 }
 
@@ -360,7 +417,8 @@ function MeetingsApp() {
         : filtered.length === 0 ? jsx('div', { className: 'st-empty', children: meetings.length ? 'Ничего не найдено по фильтру' : 'Пока нет обработанных встреч' })
         : jsx('div', { className: 'meet-cols', children: filtered.map((m) => jsx(MeetingCard, { m, expanded: openId === m.name, onToggle: () => setOpenId(openId === m.name ? null : m.name) }, m.name)) }),
 
-      jsx(ProcessForm, { onDone: () => qc.invalidateQueries({ queryKey: ['meet', 'list'] }) }),
+      jsx(ProgressPanel, { meetings }),
+      jsx(ProcessForm, { onDone: () => qc.invalidateQueries({ queryKey: ['meet', 'list'] }), knownMeetings: meetings.map((m) => m.name) }),
 
       jsxs('div', { className: 'st-foot', children: ['Встречи · meeting-intelligence · сканер папки, обновление каждые 60 с'] }),
     ] }),
