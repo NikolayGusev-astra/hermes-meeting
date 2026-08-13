@@ -60,12 +60,23 @@ const parseRest = (r) => {
 }
 
 const MOUNT = '/api/plugins/meeting-intelligence'
-const openFile = (name, file) => {
-  const url = MOUNT + '/meetings/' + encodeURIComponent(name) + '/file/' + encodeURIComponent(file)
+const openFile = async (name, file) => {
+  // Скачивание через authed ctx.rest (JSON+base64): прямой <a href> на /file/
+  // не проходит auth/origin в desktop-вьюпорте → файл не сохранялся молча.
   try {
-    const a = document.createElement('a'); a.href = url; a.download = file
+    const d = await restGet('/meetings/' + encodeURIComponent(name) + '/file/' + encodeURIComponent(file) + '/data')
+    if (!d || !d.base64) throw new Error('нет данных файла')
+    const bin = atob(d.base64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    const blob = new Blob([bytes], { type: d.contentType || 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = d.filename || file
     document.body.appendChild(a); a.click(); a.remove()
-  } catch (_) { try { window.open(url, '_blank') } catch (__) {} }
+    setTimeout(() => URL.revokeObjectURL(url), 15000)
+  } catch (e) {
+    try { host.notify({ kind: 'error', message: 'Не удалось скачать файл: ' + ((e && e.message) || e) }) } catch (_) {}
+  }
 }
 
 // ── запуск пайплайна: открыть сессию агента с skill meeting-intelligence ──

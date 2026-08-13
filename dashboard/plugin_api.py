@@ -155,6 +155,39 @@ def get_meeting_file(name: str, filename: str):
     return FileResponse(str(target), filename=safe_file)
 
 
+@router.get("/meetings/{name}/file/{filename}/data")
+def get_meeting_file_data(name: str, filename: str):
+    """Файл как base64 — для скачивания через авторизованный ctx.rest (JSON-мост).
+
+    Прямой <a href> на /file/ не проходит auth/origin в desktop-вьюпорте, поэтому
+    UI тащит файл этим роутом (через authed ctx.rest) и собирает Blob на клиенте.
+    """
+    import base64 as _b64
+    root = _meeting_root().resolve()
+    safe_name = Path(name).name
+    meeting = (root / safe_name).resolve()
+    if not _safe_within(meeting, root) or not meeting.is_dir():
+        raise HTTPException(status_code=404, detail="meeting not found")
+    safe_file = Path(filename).name
+    target = (meeting / safe_file).resolve()
+    if not _safe_within(target, meeting) or not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if target.name in _IGNORE or target.suffix.lower() not in (_OUTPUT_EXTS | _TRANSCRIPT_EXTS):
+        raise HTTPException(status_code=404, detail="file not found")
+    ext = target.suffix.lower()
+    ct = {
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".pdf": "application/pdf",
+        ".txt": "text/plain; charset=utf-8",
+        ".srt": "application/x-subrip",
+        ".vtt": "text/vtt",
+    }.get(ext, "application/octet-stream")
+    data = target.read_bytes()
+    return {"filename": safe_file, "size": len(data), "contentType": ct,
+            "base64": _b64.b64encode(data).decode("ascii")}
+
+
 # ── Обновление плагина: git-чек + ре-деплой виджета ─────────────────────
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
