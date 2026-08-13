@@ -10,10 +10,26 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-HERMES_HOME="${1:-$HOME/.hermes}"
-if [ -n "$HERMES_HOME" ] && [ -z "$(ls -d "$HERMES_HOME" 2>/dev/null)" ]; then
-  # windows-style fallback (AppData\Local\hermes)
-  HERMES_HOME="$HOME/AppData/Local/hermes"
+
+# Resolve HERMES_HOME (explicit arg > $HERMES_HOME env > OS convention).
+# Critical on macOS: Hermes Desktop keeps its home under
+# ~/Library/Application Support/hermes, NOT ~/.hermes — deploying the widget to
+# the wrong home is why the "Встречи" tab is invisible on a clean Mac install.
+detect_home() {
+  if [ -n "$1" ]; then echo "$1"; return; fi
+  if [ -n "$HERMES_HOME" ] && [ -d "$HERMES_HOME" ]; then echo "$HERMES_HOME"; return; fi
+  case "$(uname -s)" in
+    Darwin)            echo "$HOME/Library/Application Support/hermes" ;;
+    MINGW*|MSYS*|CYGWIN*) echo "${LOCALAPPDATA:-$HOME/AppData/Local}/hermes" ;;
+    *)                 echo "$HOME/.hermes" ;;
+  esac
+}
+HERMES_HOME="$(detect_home "$1")"
+if [ ! -d "$HERMES_HOME" ]; then
+  echo "NOTE: каталог $HERMES_HOME ещё не существует — создаю."
+  echo "      Если Hermes Desktop ни разу не запускался, запустите его хотя бы раз,"
+  echo "      чтобы он создал home по этому пути, и повторите деплой."
+  echo "      (macOS: ~/Library/Application Support/hermes · Windows: %LOCALAPPDATA%\\hermes)"
 fi
 
 SRC="$REPO_DIR/com.hermes.desktop/plugin.js"
@@ -40,5 +56,7 @@ cp "$SRC" "$DEST"
 echo "  ✓ deployed"
 
 echo
-echo "Restart the Hermes Desktop GUI (or reload the window) for the tab to appear."
-echo "Next: verify the 'Встречи' tab renders in the sidebar."
+echo "Полностью перезапустите Hermes Desktop, чтобы вкладка появилась."
+echo "  · macOS: ⌘Q (полный выход), не просто закрыть окно."
+echo "  · Reload desktop plugins (⌘K) НЕ перечитывает новые плагины — нужен рестарт."
+echo "Next: проверьте, что вкладка 'Встречи' отрисовалась в сайдбаре."

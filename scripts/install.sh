@@ -11,11 +11,16 @@ set -euo pipefail
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAME="$(basename "$PLUGIN_DIR")"
 
-# HERMES_HOME: Windows -> %LOCALAPPDATA%\hermes, *nix -> ~/.hermes
+# HERMES_HOME: OS convention (macOS → ~/Library/Application Support/hermes).
+# Совпадает с логикой deploy-desktop-plugin.sh, чтобы venv и виджет нашли один home.
 if [ -z "${HERMES_HOME:-}" ]; then
-  if [ -d "$HOME/AppData/Local/hermes" ]; then HERMES_HOME="$HOME/AppData/Local/hermes"
-  else HERMES_HOME="$HOME/.hermes"; fi
+  case "$(uname -s)" in
+    Darwin)              HERMES_HOME="$HOME/Library/Application Support/hermes" ;;
+    MINGW*|MSYS*|CYGWIN*) HERMES_HOME="${LOCALAPPDATA:-$HOME/AppData/Local}/hermes" ;;
+    *)                   HERMES_HOME="$HOME/.hermes" ;;
+  esac
 fi
+export HERMES_HOME
 
 echo "Плагин:  $NAME"
 echo "Репо:    $PLUGIN_DIR"
