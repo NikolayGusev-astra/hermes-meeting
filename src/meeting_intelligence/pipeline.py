@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from .attribution import attribute_speakers
 from .gpu import _transcribe_default_device
 from .output import prepare_agent_transcript, write_protocol_docx
 from .output.docx import NAMES_RU
@@ -179,17 +180,21 @@ def _participant_map(value: Optional[str]) -> dict[str, str]:
 
 
 def replace_participant_labels(protocol: dict, participants: Optional[str]) -> None:
-    participant_map = _participant_map(participants)
+    apply_speaker_mapping(protocol, _participant_map(participants))
+
+
+def apply_speaker_mapping(protocol: dict, mapping: dict[str, str]) -> None:
+    """Apply a SPEAKER_NN-to-name mapping to protocol people fields."""
     for section in ["participants", "decisions", "assignments"]:
         for item in protocol.get(section, []):
             if not isinstance(item, dict):
                 continue
             for field_name in ["name", "assignee", "approved_by"]:
                 value = item.get(field_name)
-                if isinstance(value, str) and value in participant_map:
-                    item[field_name] = participant_map[value]
+                if isinstance(value, str) and value in mapping:
+                    item[field_name] = mapping[value]
                 elif isinstance(value, list):
-                    item[field_name] = [participant_map.get(entry, entry) for entry in value]
+                    item[field_name] = [mapping.get(entry, entry) for entry in value]
 
 
 def validate_protocol(protocol: Optional[dict], transcript: str) -> dict:
@@ -245,11 +250,31 @@ def validate_protocol(protocol: Optional[dict], transcript: str) -> dict:
     }
 
 
-def build_protocol(transcript: str, model: str, allow_cloud: bool) -> dict:
+def build_protocol(
+    transcript: str, model: str, allow_cloud: bool, *, auto_attribute: bool = True
+) -> dict:
     """Build a protocol while retaining the legacy CLI monkeypatch seam."""
-    return _protocol_chunk.build_protocol(
+    protocol = _protocol_chunk.build_protocol(
         transcript, model, allow_cloud, builder=_build_protocol_chunk
     )
+    participants = protocol.get("participants", [])
+    participant_names = [
+        item.get("name")
+        for item in participants
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    ]
+    if (
+        auto_attribute
+        and participant_names
+        and all(re.fullmatch(r"SPEAKER_\d+", name) for name in participant_names)
+    ):
+        result = attribute_speakers(transcript, model, allow_cloud)
+        if result["ok"] and result["mapping"]:
+            apply_speaker_mapping(protocol, result["mapping"])
+            log.info("Applied automatic speaker attribution: %s", result["mapping"])
+        elif not result["ok"]:
+            log.warning("Automatic speaker attribution failed: %s", result["err"])
+    return protocol
 
 
 # ── Translation ──────────────────────────────────────────────────────────
@@ -455,7 +480,12 @@ def protocol(params: ProtocolParams) -> ProtocolResult:
     transcript = params.transcript.read_text(encoding="utf-8")
     if _needs_protocol_chunking(transcript):
         log.info("Transcript exceeds 6000 tokens; protocol will be chunked")
-    proto = build_protocol(transcript, params.model, allow_cloud=params.allow_cloud)
+    proto = build_protocol(
+        transcript,
+        params.model,
+        allow_cloud=params.allow_cloud,
+        auto_attribute=not bool(params.participants),
+    )
     if _protocol_verification_enabled():
         proto = _verify_protocol(
             proto, transcript, params.model, allow_cloud=params.allow_cloud
@@ -525,7 +555,10 @@ def process(params: ProcessParams) -> ProcessResult:
         log.info("Saved translation: %s", translated_path)
 
     proto = build_protocol(
-        tresult.transcript, params.llm_model, allow_cloud=params.allow_cloud
+        tresult.transcript,
+        params.llm_model,
+        allow_cloud=params.allow_cloud,
+        auto_attribute=not bool(params.participants),
     )
     validation = validate_protocol(proto, tresult.transcript)
     replace_participant_labels(proto, params.participants)

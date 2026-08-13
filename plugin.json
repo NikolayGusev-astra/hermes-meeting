@@ -9,6 +9,9 @@
   "extensions": {
     "ru.hermes": {
       "entrypoint": "meeting_intelligence.plugin:register"
+    },
+    "com.hermes.desktop": {
+      "plugin_entry": "com.hermes.desktop/plugin.js"
     }
   }
 }
