@@ -27,7 +27,14 @@ from .output.docx import NAMES_RU
 from .protocol import _build_protocol_chunk, _protocol_verification_enabled, _verify_protocol
 from .protocol import chunk as _protocol_chunk
 from .protocol.chunk import _needs_protocol_chunking
-from .sources import MeetingError, _is_url, _resolve_source, fail  # noqa: F401
+from .sources import (
+    MeetingError,
+    _is_tg_source,
+    _is_url,
+    _resolve_source,
+    fail,
+    resolve_tg_source,
+)  # noqa: F401
 from .transcribe import _clean_whisper_artifacts, transcribe_audio  # noqa: F401
 
 log = logging.getLogger("meeting")
@@ -369,6 +376,9 @@ class TranscribeParams:
     diarize: bool = False
     num_speakers: Optional[int] = None
     recognize: bool = False
+    speaker_label: Optional[str] = None
+    tg_since: Optional[str] = None
+    tg_limit: int = 3000
 
 
 @dataclass
@@ -442,7 +452,40 @@ class ProcessResult:
 
 
 def transcribe(params: TranscribeParams) -> TranscribeResult:
-    """Resolve source, transcribe audio, clean artifacts, save transcript."""
+    """Resolve source, transcribe audio, clean artifacts, save transcript.
+
+    When ``source`` is a Telegram handle/link (``tg:`` or ``t.me/...``), the
+    full ingest pipeline runs: fetch voices via userbot → transcribe each with
+    DM speaker attribution → group into meetings (ADR-010). The first meeting's
+    folder is returned as ``transcript_path`` for backward-compatible callers.
+    """
+    if _is_tg_source(params.source):
+        from .ingest import ingest_telegram
+
+        meetings = ingest_telegram(
+            params.source.replace("tg:", "").strip(),
+            since=params.tg_since,
+            limit=params.tg_limit,
+            language=params.language or "ru",
+            device=params.device,
+            compute_type=params.compute_type,
+            output_dir=params.output.parent if params.output else None,
+            model=params.model,
+        )
+        if not meetings:
+            return TranscribeResult(
+                transcript_path=Path("nul"), transcript="", meta={"diarization": "none"}
+            )
+        first = meetings[0]
+        transcript = "\n\n".join(
+            f"[{u.date.strftime('%H:%M:%S')}] {u.speaker} | {u.transcript}"
+            for u in first.utterances
+        )
+        folder = first.folder or Path(".")
+        return TranscribeResult(
+            transcript_path=folder, transcript=transcript, meta={"meetings": len(meetings)}
+        )
+
     src = _resolve_source(params.source)
     if not src.exists():
         fail(f"File not found: {src}")
@@ -457,6 +500,7 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
     transcript, meta = transcribe_audio(
         audio, params.model, params.language, params.device, params.compute_type,
         diarize=params.diarize, num_speakers=params.num_speakers, recognize=params.recognize,
+        speaker_label=params.speaker_label,
     )
     transcript = _clean_whisper_artifacts(transcript)
     out = params.output or (src.parent / f"{src.stem}.{NAMES_RU['transcript']}")

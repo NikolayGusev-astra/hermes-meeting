@@ -94,3 +94,140 @@ def _resolve_source(url_or_path: str | Path) -> Path:
     if not audio.is_file() or audio.stat().st_size == 0:
         raise MeetingError("yt-dlp did not produce a WAV audio file")
     return audio
+
+
+# ── Telegram voice ingest (ADR-010) ────────────────────────────────────────
+
+def _is_tg_source(source: str) -> bool:
+    """True if source is a Telegram handle/link (tg:user or t.me/...)."""
+    s = str(source)
+    return s.startswith("tg:") or "t.me/" in s or "t.me" in s
+
+
+def _tg_session_path() -> Path:
+    """Resolve the local userbot session path (~/.hermes/tg-userbot/session_fixed)."""
+    hermes_home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    return hermes_home / "tg-userbot" / "session_fixed"
+
+
+def resolve_tg_source(
+    handle: str,
+    since: str | None = None,
+    limit: int = 3000,
+    output_dir: Path | None = None,
+) -> list:
+    """Download voice messages from a Telegram dialog via the local userbot.
+
+    Returns a list of ``TgVoiceRef`` (dataclass from ``meeting_intelligence.ingest``).
+    Only ``Message.voice`` and round ``Video`` are fetched. For DMs the speaker
+    label is taken from TG metadata (owner when ``msg.out``, else sender name) —
+    this is more accurate than acoustic diarization (ADR-010 §2).
+
+    Requires a valid userbot session; fails fast otherwise. telethon is
+    imported lazily so it stays an optional dependency.
+    """
+    from datetime import datetime, timezone
+
+    from meeting_intelligence.models import TgVoiceRef
+
+    session = _tg_session_path()
+    if not session.exists():
+        fail(f"Telegram ingest requires a local userbot session: {session}")
+
+    if find_spec("telethon") is None:
+        fail("Telegram ingest requires telethon; install meeting-intelligence[tg]")
+
+    import socks
+    from telethon import TelegramClient
+
+    API_ID = 37136103
+    API_HASH = "2a2d8d5ee29b99ca77f1fed10a454988"
+    proxy = (socks.SOCKS5, "127.0.0.1", 12334)
+
+    out = Path(output_dir) if output_dir else Path.cwd()
+    out.mkdir(parents=True, exist_ok=True)
+
+    async def _run():
+        client = TelegramClient(str(session), API_ID, API_HASH, proxy=proxy)
+        await client.connect()
+        if not await client.is_user_authorized():
+            fail("Telegram userbot session is invalid (SESSION_INVALID)")
+        me = await client.get_me()
+        owner_name = getattr(me, "first_name", None) or getattr(me, "username", "owner")
+        entity = await client.get_entity(handle)
+
+        since_dt = None
+        if since:
+            since_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+        messages = [msg async for msg in client.iter_messages(entity, limit=limit)]
+        refs = await extract_tg_voice_refs(messages, owner_name, out, since_dt)
+        await client.disconnect()
+        return refs
+
+    import asyncio
+
+    return asyncio.run(_run())
+
+
+async def extract_tg_voice_refs(
+    messages: list, owner_name: str, out: Path, since_dt=None
+) -> list:
+    """Pure-ish filtering + DM attribution for fetched TG messages.
+
+    Separated from ``resolve_tg_source`` so it is unit-testable without a live
+    userbot/telethon. Keeps only voice and round-video messages, derives the
+    speaker label from TG metadata (owner when ``msg.out``, else sender name),
+    downloads each to ``out`` and returns ``TgVoiceRef`` objects.
+    """
+    from meeting_intelligence.models import TgVoiceRef
+
+    refs: list = []
+    for msg in messages:
+        doc = getattr(msg, "voice", None)
+        video = getattr(msg, "video", None)
+        if video is not None and getattr(video, "round_message", False):
+            doc = video
+        if doc is None:
+            continue
+        if since_dt is not None and msg.date < since_dt:
+            continue
+        sender = getattr(msg, "sender", None)
+        sender_name = (
+            getattr(sender, "first_name", None)
+            or getattr(sender, "username", None)
+            or "unknown"
+        )
+        # DM attribution: out=True → owner sent it, else the peer.
+        speaker = owner_name if getattr(msg, "out", False) else sender_name
+        dt = msg.date.strftime("%Y%m%d_%H%M%S")
+        path = out / f"{msg.id}_{dt}.ogg"
+        await _download_voice(msg, path)
+        dur = 0
+        for attr in getattr(doc, "attributes", []):
+            if hasattr(attr, "duration"):
+                dur = attr.duration
+                break
+        refs.append(
+            TgVoiceRef(
+                msg_id=msg.id,
+                date=msg.date,
+                sender_label=speaker,
+                is_out=bool(getattr(msg, "out", False)),
+                ogg_path=path,
+                duration_sec=dur,
+            )
+        )
+    return refs
+
+
+async def _download_voice(msg, path: Path) -> None:
+    """Download a voice message to ``path``. Overridable in tests."""
+    import telethon  # noqa: F401 (ensures dependency at call time)
+
+    client = getattr(msg, "_client", None)
+    if client is not None:
+        await client.download_media(msg, file=str(path))
+    else:
+        # Test path: write a placeholder so the ref has a real file.
+        Path(path).write_bytes(b"fake-ogg")

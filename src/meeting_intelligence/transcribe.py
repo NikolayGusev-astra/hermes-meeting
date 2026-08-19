@@ -156,6 +156,7 @@ def _diarize_speakers(segments, audio: Path, device: str, num_speakers=None, rec
 def transcribe_audio(
     audio: Path, model: str, language: Optional[str], device: str, compute_type: str,
     diarize: bool = False, num_speakers: Optional[int] = None, recognize: bool = False,
+    speaker_label: Optional[str] = None,
 ) -> Tuple[str, dict]:
     from faster_whisper import WhisperModel
 
@@ -217,7 +218,14 @@ def transcribe_audio(
         ]
 
     diarization_used = "silence-gap"
-    if diarize:
+    if speaker_label is not None:
+        # DM attribution from TG metadata — more accurate than acoustic
+        # diarization, and avoids loading pyannote entirely (ADR-010 §2).
+        for item in segments:
+            item["speaker_id"] = str(speaker_label)
+        enriched = segments
+        diarization_used = "tg-sender:{}".format(speaker_label)
+    elif diarize:
         try:
             enriched = _diarize_speakers(segments, audio, device, num_speakers, recognize=recognize)
             nspk = len({x["speaker_id"] for x in enriched})

@@ -187,6 +187,9 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             diarize=getattr(args, "diarize", False),
             num_speakers=getattr(args, "num_speakers", None),
             recognize=getattr(args, "recognize", False),
+            speaker_label=getattr(args, "speaker_label", None),
+            tg_since=getattr(args, "since", None),
+            tg_limit=getattr(args, "limit", 3000),
         )
     )
     if _agent_mode_enabled():
@@ -298,6 +301,8 @@ def main() -> int:
     transcribe_p.add_argument("--diarize", action="store_true", default=False, help="Speaker diarization (pyannote, offline)")
     transcribe_p.add_argument("--num-speakers", type=int, default=None, help="Hint: exact number of speakers")
     transcribe_p.add_argument("--recognize", action="store_true", default=False, help="Match speakers to voiceprint catalog")
+    transcribe_p.add_argument("--since", default=None, help="Telegram ingest: only voices since YYYY-MM-DD")
+    transcribe_p.add_argument("--limit", type=int, default=3000, help="Telegram ingest: max messages to scan")
 
     translate_p = sub.add_parser("translate")
     translate_p.add_argument("transcript", type=Path)
