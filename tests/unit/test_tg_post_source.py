@@ -142,9 +142,10 @@ def test_resolve_tg_post_media_downloads(monkeypatch, tmp_path):
 
     out_dir = tmp_path / "out"
     got = sources.resolve_tg_post_media("neuraldeep", 2288, output_dir=out_dir)
-    assert got.exists()
-    assert got.stat().st_size > 0
-    assert got.name == "neuraldeep_2288.mp4"
+    assert len(got) == 1
+    assert got[0].exists()
+    assert got[0].stat().st_size > 0
+    assert got[0].name == "neuraldeep_2288.mp4"
 
 
 def test_resolve_tg_post_no_media_fails(monkeypatch, tmp_path):
@@ -193,7 +194,7 @@ def test_pipeline_routes_tg_post_to_local_file(monkeypatch, tmp_path):
         lambda ch, pid, output_dir=None: called.update(
             channel=ch, post=pid
         )
-        or fake_media,
+        or [fake_media],
     )
     monkeypatch.setattr(
         pipeline,

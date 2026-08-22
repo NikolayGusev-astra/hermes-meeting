@@ -31,13 +31,17 @@ ADR-010 добавил источник `tg:<handle>` — инжест **все�
    (публичные каналы; приватные `t.me/c/<chat>/<post>` — вне scope v1).
    Совпадение → маршрут в новый резолвер, иначе поведение ADR-010 без изменений.
 
-2. **Новый `resolve_tg_post_media(channel, post_id, output_dir) -> Path`**
+2. **Новый `resolve_tg_post_media(channel, post_id, output_dir) -> list[Path]`**
    в `sources.py`:
    - та же userbot-сессия и SOCKS-прокси, что ADR-010; telethon — lazy import;
    - `get_messages(entity, ids=post_id)`; без медиа → `fail(...)`;
-   - скачивание `msg.video` (вкл. round) / `msg.document`;
-   - файл `<channel>_<post_id>.<ext>`; возврат Path в обычную ветку
-     `transcribe()` (check_resource_limits → extract_audio → whisper).
+   - **альбом (media group)**: если у поста есть `grouped_id`, резолвится вся
+     группа (доп. от 2026-08-22, по кейсу t.me/grpzdc/86259 — альбом
+     фото+видео); видео → `.mp4`, фото → `.jpg`, подпись поста →
+     `.caption.txt` рядом с файлом;
+   - возврат **списка** файлов в `_transcribe_media_set` (pipeline):
+     видео/голос → whisper, фото → vision-мост ADR-012; композитный
+     транскрипт с заголовками `=== [i/N] вид: файл ===`.
 
 3. **CLI/MCP без изменений**: `meeting transcribe https://t.me/neuraldeep/2288
    --diarize` просто заработает; `meeting_transcribe(source=...)` — тоже.

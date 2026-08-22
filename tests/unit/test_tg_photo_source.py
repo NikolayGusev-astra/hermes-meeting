@@ -62,10 +62,11 @@ def test_resolve_tg_post_photo_downloads_image(monkeypatch, tmp_path):
     )
 
     got = sources.resolve_tg_post_media("neuraldeep", 42, output_dir=tmp_path / "out")
-    assert got.exists()
-    assert got.suffix == ".jpg"
+    assert len(got) == 1
+    assert got[0].exists()
+    assert got[0].suffix == ".jpg"
     # подпись сохранена рядом для транскрипта
-    cap = got.with_suffix(".caption.txt")
+    cap = got[0].with_suffix(".caption.txt")
     assert cap.exists() and "подпись" in cap.read_text(encoding="utf-8")
 
 
@@ -90,7 +91,7 @@ def test_photo_beats_nothing_video_wins_over_photo(monkeypatch, tmp_path):
     monkeypatch.setattr(sources, "_tg_post_client", lambda s, p: _C(msg))
     got = sources.resolve_tg_post_media("ch", 7, output_dir=tmp_path / "o")
     assert downloaded == [".mp4"]
-    assert got.suffix == ".mp4"
+    assert got[0].suffix == ".mp4"
 
 
 def test_pipeline_transcribes_photo_via_vision(monkeypatch, tmp_path):
@@ -102,7 +103,7 @@ def test_pipeline_transcribes_photo_via_vision(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         pipeline, "resolve_tg_post_media",
-        lambda ch, pid, output_dir=None: fake_img,
+        lambda ch, pid, output_dir=None: [fake_img],
     )
     called = {}
 

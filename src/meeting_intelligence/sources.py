@@ -298,11 +298,13 @@ def resolve_tg_post_media(
     channel: str,
     post_id: int,
     output_dir: Path | None = None,
-) -> Path:
-    """Download the media attachment of one Telegram post (ADR-011).
+) -> list:
+    """Download the media attachment(s) of one Telegram post (ADR-011/012).
 
-    ``t.me/<channel>/<post_id>`` → локальный файл (видео/документ/голос).
-    Дальше файл идёт обычным конвейером (лимиты → ffmpeg → whisper).
+    ``t.me/<channel>/<post_id>`` → список локальных файлов. Если пост —
+    элемент альбома (media group), резолвится вся группа по ``grouped_id``:
+    видео → .mp4 (+ подпись в .caption.txt), фото → .jpg + .caption.txt.
+    Дальше: видео/голос → whisper, фото → vision-мост (pipeline).
     Приватные чаты ('t.me/c/<chat>/<post>') вне scope v1.
     """
     import shutil
@@ -319,7 +321,16 @@ def resolve_tg_post_media(
     out.mkdir(parents=True, exist_ok=True)
     proxy = (socks.SOCKS5, "127.0.0.1", 12334)
 
-    async def _run() -> Path:
+    def _kind(msg) -> str | None:
+        if getattr(msg, "video", None) is not None:
+            return "mp4"
+        if getattr(msg, "voice", None) is not None or getattr(msg, "document", None) is not None:
+            return "ogg"
+        if getattr(msg, "photo", None) is not None:
+            return "jpg"
+        return None
+
+    async def _run() -> list:
         session_copy = _copy_session_for_read(session)
         try:
             client = _tg_post_client(session_copy, proxy)
@@ -330,37 +341,50 @@ def resolve_tg_post_media(
             msg = await client.get_messages(entity, ids=int(post_id))
             if msg is None or getattr(msg, "media", None) is None:
                 fail(f"Message {post_id} in {channel} has no downloadable media")
-            video = getattr(msg, "video", None)
-            document = getattr(msg, "document", None)
-            voice = getattr(msg, "voice", None)
-            photo = getattr(msg, "photo", None)
-            if video is None and document is None and voice is None and photo is None:
-                fail(
-                    f"Message {post_id} in {channel}: media type not supported "
-                    "(only video/document/voice/photo; other types are out of scope)"
-                )
-            caption = getattr(msg, "message", "") or ""
-            is_photo = (
-                photo is not None
-                and video is None
-                and document is None
-                and voice is None
-            )
-            if is_photo:
-                # ADR-012: фото → vision-конвейер; текст появится позже,
-                # здесь только скачиваем картинку и сохраняем подпись.
-                target = out / f"{channel}_{post_id}.jpg"
-                path = await client.download_media(msg, file=str(target))
-                Path(str(path)).with_suffix(".caption.txt").write_text(
-                    caption, encoding="utf-8"
-                )
-            else:
-                target = out / f"{channel}_{post_id}.mp4"
-                path = await client.download_media(msg, file=str(target))
+
+            # Альбом: вся медиагруппа по grouped_id (ссылка может указывать
+            # на любой элемент группы — резолвим все).
+            targets = [msg]
+            gid = getattr(msg, "grouped_id", None)
+            if gid:
+                siblings = [
+                    m
+                    async for m in client.iter_messages(
+                        entity, ids=int(post_id), limit=50
+                    )
+                    if getattr(m, "media", None) is not None
+                    and getattr(m, "grouped_id", None) == gid
+                ]
+                if siblings:
+                    targets = sorted(siblings, key=lambda m: m.id)
+
+            paths: list = []
+            for t in targets:
+                kind = _kind(t)
+                if kind is None:
+                    log.warning(
+                        "Album item %s/%s: unsupported media type, skipped",
+                        channel,
+                        t.id,
+                    )
+                    continue
+                target = out / f"{channel}_{t.id}.{kind}"
+                path = await client.download_media(t, file=str(target))
+                caption = getattr(t, "message", "") or ""
+                if caption and kind in {"jpg", "mp4"}:
+                    Path(str(path)).with_suffix(".caption.txt").write_text(
+                        caption, encoding="utf-8"
+                    )
+                paths.append(Path(path))
             await client.disconnect()
         finally:
             shutil.rmtree(session_copy.parent, ignore_errors=True)
-        return Path(path)
+        if not paths:
+            fail(
+                f"Message {post_id} in {channel}: no supported media "
+                "(only video/photo/voice/document; text-only posts are out of scope)"
+            )
+        return paths
 
     import asyncio
 

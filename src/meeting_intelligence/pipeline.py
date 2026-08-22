@@ -458,6 +458,98 @@ class ProcessResult:
 # ── Orchestration functions ──────────────────────────────────────────────
 
 
+def _transcribe_single_media(src: Path, params: "TranscribeParams") -> tuple:
+    """Один медиа-файл → (transcript, meta, out_path). Видео/аудио → whisper,
+    картинка → vision-мост (ADR-012) с подписью из .caption.txt."""
+    if src.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+        caption_path = src.with_suffix(".caption.txt")
+        caption = (
+            caption_path.read_text(encoding="utf-8").strip()
+            if caption_path.exists()
+            else ""
+        )
+        description = describe_image(src)
+        transcript = (
+            f"{caption}\n\n{description}" if caption else description
+        ).strip()
+        return transcript, {"vision": True}, src.parent / f"{src.stem}.transcript.txt"
+
+    check_resource_limits(
+        src,
+        max_duration_sec=params.max_duration_sec,
+        max_file_mb=params.max_file_mb,
+    )
+    audio = (
+        src
+        if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"}
+        else src.with_suffix(".wav")
+    )
+    if audio != src:
+        extract_audio(src, audio)
+    transcript, meta = transcribe_audio(
+        audio, params.model, params.language, params.device, params.compute_type,
+        diarize=params.diarize, num_speakers=params.num_speakers, recognize=params.recognize,
+        speaker_label=params.speaker_label,
+    )
+    transcript = _clean_whisper_artifacts(transcript)
+    return transcript, meta, src.parent / f"{src.stem}.{NAMES_RU['transcript']}"
+
+
+def _transcribe_media_set(files: list, params: "TranscribeParams") -> "TranscribeResult":
+    """Альбом (или одиночный пост): склеить транскрипты всех медиа.
+
+    Порядок — по имени файла (id сообщений возрастает = порядок в альбоме).
+    Подпись фото идёт перед описанием; секции разделены заголовками.
+    """
+    parts: list = []
+    metas: dict = {}
+    first_out: Optional[Path] = None
+    transcript_text = ""
+    for i, f in enumerate(sorted(files, key=lambda p: p.name), start=1):
+        caption = ""
+        cap = f.with_suffix(".caption.txt")
+        if cap.exists():
+            caption = cap.read_text(encoding="utf-8").strip()
+
+        transcript, meta, out_path = _transcribe_single_media(f, params)
+        if len(files) == 1:
+            # Одиночный пост — без заголовков, как раньше.
+            if caption and not transcript.startswith(caption):
+                transcript = f"{caption}\n\n{transcript}"
+            transcript_text = transcript
+            metas.update(meta)
+            first_out = params.output or out_path
+        else:
+            kind = {
+                ".mp4": "видео",
+                ".jpg": "фото",
+                ".jpeg": "фото",
+                ".png": "фото",
+                ".webp": "фото",
+                ".ogg": "голосовое",
+            }.get(f.suffix.lower(), "медиа")
+            header = f"=== [{i}/{len(files)}] {kind}: {f.stem} ==="
+            section = f"{header}\n{caption}\n\n{transcript}" if caption else f"{header}\n{transcript}"
+            parts.append(section.strip())
+            metas.update({k: v for k, v in meta.items() if k != "vision"})
+            if first_out is None:
+                first_out = params.output or out_path
+
+    if len(files) > 1:
+        transcript_text = "\n\n".join(parts)
+
+    out = first_out or files[0].parent / "album.transcript.txt"
+    out.write_text(transcript_text, encoding="utf-8")
+    atomic_write_json(
+        out.with_suffix(".transcript.json"),
+        {"album_size": len(files), **metas},
+    )
+    log.info("Saved composite transcript (%d media): %s", len(files), out)
+    return TranscribeResult(
+        transcript_path=out, transcript=transcript_text, meta={"album_size": len(files), **metas}
+    )
+
+
 def transcribe(params: TranscribeParams) -> TranscribeResult:
     """Resolve source, transcribe audio, clean artifacts, save transcript.
 
@@ -468,7 +560,8 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
     """
     parsed_post = _parse_tg_post(params.source)
     if parsed_post is not None:
-        # ADR-011: конкретный пост → медиа-вложение → файловая ветка
+        # ADR-011/012: пост (или альбом) → список медиа-файлов → композитный
+        # транскрипт: видео → whisper, фото → vision, подписи → заголовки.
         import tempfile as _tempfile
 
         channel, post_id = parsed_post
@@ -477,7 +570,8 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
             if params.output
             else Path(_tempfile.mkdtemp(prefix="meeting-tg-post-"))
         )
-        src = resolve_tg_post_media(channel, post_id, output_dir=out_dir)
+        media_files = resolve_tg_post_media(channel, post_id, output_dir=out_dir)
+        return _transcribe_media_set(media_files, params)
     elif _is_tg_source(params.source):
         from .ingest import ingest_telegram
 
