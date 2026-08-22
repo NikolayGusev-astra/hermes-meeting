@@ -660,25 +660,61 @@ def translate(params: TranslateParams) -> TranslateResult:
     return TranslateResult(output_path=out, lines=translated)
 
 
+def _write_protocol_docx_safe(proto: dict, docx_dir: Path) -> None:
+    """DOCX протокола с фолбэком: файл может быть открыт/залочен (Word)."""
+    try:
+        write_protocol_docx(proto, docx_dir / NAMES_RU["protocol"])
+    except PermissionError:
+        from datetime import datetime
+
+        fallback = docx_dir / f"Протокол.{datetime.now().strftime('%H%M%S')}.docx"
+        write_protocol_docx(proto, fallback)
+        log.warning("DOCX locked, saved to: %s", fallback)
+
+
+def _build_and_validate_protocol(
+    transcript: str, model: str, allow_cloud: bool, participants: Optional[str]
+) -> tuple[dict, dict]:
+    """Общий путь protocol()/process(): сборка → верификация → валидация → маппинг имён."""
+    if _needs_protocol_chunking(transcript):
+        log.info("Transcript exceeds 6000 tokens; protocol will be chunked")
+    proto = build_protocol(
+        transcript,
+        model,
+        allow_cloud=allow_cloud,
+        auto_attribute=not bool(participants),
+    )
+    if _protocol_verification_enabled():
+        proto = _verify_protocol(proto, transcript, model, allow_cloud=allow_cloud)
+    validation = validate_protocol(proto, transcript)
+    replace_participant_labels(proto, participants)
+    return proto, validation
+
+
+def _save_protocol(
+    proto: dict, validation: dict, out_path: Path, docx: bool, docx_dir: Path
+) -> None:
+    """Общий хвост protocol()/process(): JSON (+DOCX) либо .rejected.json."""
+    if validation["valid"]:
+        atomic_write_json(out_path, proto)
+        if docx:
+            _write_protocol_docx_safe(proto, docx_dir)
+        log.info("Saved protocol: %s", out_path)
+    else:
+        # with_suffix нельзя: удвоил бы «protocol» в «x.protocol.protocol.rejected.json»
+        rejected = out_path.with_name(out_path.stem + ".rejected.json")
+        atomic_write_json(rejected, proto)
+        log.error("Invalid protocol saved to: %s", rejected)
+
+
 def protocol(params: ProtocolParams) -> ProtocolResult:
     """Build and validate a meeting protocol from transcript."""
     if not params.transcript.exists():
         fail(f"Transcript not found: {params.transcript}")
     transcript = params.transcript.read_text(encoding="utf-8")
-    if _needs_protocol_chunking(transcript):
-        log.info("Transcript exceeds 6000 tokens; protocol will be chunked")
-    proto = build_protocol(
-        transcript,
-        params.model,
-        allow_cloud=params.allow_cloud,
-        auto_attribute=not bool(params.participants),
+    proto, validation = _build_and_validate_protocol(
+        transcript, params.model, params.allow_cloud, params.participants
     )
-    if _protocol_verification_enabled():
-        proto = _verify_protocol(
-            proto, transcript, params.model, allow_cloud=params.allow_cloud
-        )
-    validation = validate_protocol(proto, transcript)
-    replace_participant_labels(proto, params.participants)
     proto["schema_version"] = "0.1.0"
     proto["source_hash"] = sha256(params.transcript)
     proto["stt_model"] = params.model
@@ -691,24 +727,7 @@ def protocol(params: ProtocolParams) -> ProtocolResult:
     }
     proto["quality"] = validation
     out_path = params.output or params.transcript.with_suffix(".protocol.json")
-    if validation["valid"]:
-        atomic_write_json(out_path, proto)
-        if params.docx:
-            try:
-                write_protocol_docx(proto, params.transcript.parent / NAMES_RU["protocol"])
-            except PermissionError:
-                from datetime import datetime
-
-                fallback = params.transcript.parent / (
-                    f"Протокол.{datetime.now().strftime('%H%M%S')}.docx"
-                )
-                write_protocol_docx(proto, fallback)
-                log.warning("DOCX locked, saved to: %s", fallback)
-        log.info("Saved protocol: %s", out_path)
-    else:
-        rejected = out_path.with_suffix(".protocol.rejected.json")
-        atomic_write_json(rejected, proto)
-        log.error("Invalid protocol saved to: %s", rejected)
+    _save_protocol(proto, validation, out_path, params.docx, params.transcript.parent)
     return ProtocolResult(
         protocol_path=out_path if validation["valid"] else None,
         protocol=proto,
@@ -746,14 +765,9 @@ def process(params: ProcessParams) -> ProcessResult:
         translated_path.write_text("\n".join(translated), encoding="utf-8")
         log.info("Saved translation: %s", translated_path)
 
-    proto = build_protocol(
-        tresult.transcript,
-        params.llm_model,
-        allow_cloud=params.allow_cloud,
-        auto_attribute=not bool(params.participants),
+    proto, validation = _build_and_validate_protocol(
+        tresult.transcript, params.llm_model, params.allow_cloud, params.participants
     )
-    validation = validate_protocol(proto, tresult.transcript)
-    replace_participant_labels(proto, params.participants)
     proto["quality"] = validation
     proto["schema_version"] = "0.1.0"
     proto["source_hash"] = sha256(tresult.transcript_path)
@@ -768,15 +782,7 @@ def process(params: ProcessParams) -> ProcessResult:
         "target_lang": params.target_lang,
     }
     protocol_path = src.with_suffix(".protocol.json")
-    if validation["valid"]:
-        atomic_write_json(protocol_path, proto)
-        if params.docx:
-            write_protocol_docx(proto, src.parent / NAMES_RU["protocol"])
-        log.info("Saved protocol: %s", protocol_path)
-    else:
-        rejected = protocol_path.with_suffix(".protocol.rejected.json")
-        atomic_write_json(rejected, proto)
-        log.error("Invalid protocol saved to: %s", rejected)
+    _save_protocol(proto, validation, protocol_path, params.docx, src.parent)
 
     return ProcessResult(
         transcript_path=tresult.transcript_path,
