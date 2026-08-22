@@ -510,7 +510,7 @@ function StorageGate({ config, qc }) {
 function DiskStatus({ data }) {
   if (!data) return null
   return jsxs('div', { className: 'meet-disk' + (data.low_space ? ' danger' : ''), children: [
-    jsx('span', { children: '💾 ' + (data.meetings || 0) + ' встреч · ' + fmtBytes(data.used_bytes) + ' · свободно ' + (data.free_pct == null ? '—' : data.free_pct + '%') }),
+    jsx('span', { children: '💾 ' + (data.meetings || 0) + ' встреч · ' + fmtBytes(data.used_bytes) + ' · на диске свободно ' + (data.free_bytes ? fmtBytes(data.free_bytes) : '—') + (data.free_pct != null ? ' (' + data.free_pct + '%)' : '') }),
     data.low_space ? jsx('span', { children: '⚠ Мало места на диске — очистите старое' }) : null,
   ] })
 }

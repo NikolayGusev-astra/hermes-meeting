@@ -198,7 +198,11 @@ def storage_config_set(body: dict = Body(default={})):
 
 @router.get("/storage/status")
 def storage_status():
-    """Сводка по размеру встреч + свободное место (предупреждение при <15%)."""
+    """Сводка: размер встреч + место на диске (два независимых показателя).
+
+    free_pct — процент всего диска; low_space считается и по проценту (<15%),
+    и по абсолюту (<20 ГБ), чтобы диск на 2 ТБ не «краснел» при 7%.
+    """
     root = _meeting_root()
     used = 0
     meetings = 0
@@ -219,6 +223,10 @@ def storage_status():
     except Exception:
         total = free = 0
         free_pct = None
+    FREE_ABS_MIN = 20 * 1024**3  # 20 GB
+    low_space = (
+        free_pct is not None and free_pct < 15
+    ) or (free and free < FREE_ABS_MIN)
     return {
         "root": str(root),
         "meetings": meetings,
@@ -226,7 +234,7 @@ def storage_status():
         "total_bytes": total,
         "free_bytes": free,
         "free_pct": free_pct,
-        "low_space": (free_pct is not None and free_pct < 15),
+        "low_space": low_space,
     }
 
 
