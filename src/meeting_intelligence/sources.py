@@ -128,6 +128,11 @@ def _tg_session_path() -> Path:
     return hermes_home / "tg-userbot" / "session_fixed"
 
 
+def _tg_session_exists(session: Path) -> bool:
+    """Telethon хранит <name>.session — принимать и голый путь, и с суффиксом."""
+    return session.exists() or Path(str(session) + ".session").exists()
+
+
 def _tg_post_client(session: Path, proxy):
     """Build a telethon client for post resolution. Overridable in tests."""
     import socks
@@ -159,7 +164,7 @@ def resolve_tg_source(
     from meeting_intelligence.models import TgVoiceRef
 
     session = _tg_session_path()
-    if not session.exists():
+    if not _tg_session_exists(session):
         fail(f"Telegram ingest requires a local userbot session: {session}")
 
     if find_spec("telethon") is None:
@@ -275,7 +280,7 @@ def resolve_tg_post_media(
     import socks
 
     session = _tg_session_path()
-    if not session.exists():
+    if not _tg_session_exists(session):
         fail(f"Telegram ingest requires a local userbot session: {session}")
 
     if find_spec("telethon") is None:

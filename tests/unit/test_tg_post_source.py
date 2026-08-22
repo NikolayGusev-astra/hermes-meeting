@@ -59,6 +59,17 @@ def test_dialog_source_is_not_post():
     assert sources._is_tg_source("https://t.me/neuraldeep/2288") is True
 
 
+def test_session_exists_accepts_telethon_suffix(tmp_path):
+    """Telethon хранит <name>.session; голый путь тоже валиден (обратная совместимость)."""
+    bare = tmp_path / "session_fixed"
+    assert sources._tg_session_exists(bare) is False
+    bare.write_bytes(b"s")
+    assert sources._tg_session_exists(bare) is True
+    suffixed = tmp_path / "other"
+    (tmp_path / "other.session").write_bytes(b"s")
+    assert sources._tg_session_exists(suffixed) is True
+
+
 # ── resolve_tg_post_media (mocked telethon, no network) ───────────────────
 
 
