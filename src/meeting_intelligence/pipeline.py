@@ -38,6 +38,7 @@ from .sources import (
     resolve_tg_source,
 )  # noqa: F401
 from .transcribe import _clean_whisper_artifacts, transcribe_audio  # noqa: F401
+from .vision import describe_image  # noqa: F401
 
 log = logging.getLogger("meeting")
 
@@ -502,6 +503,24 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
 
     else:
         src = _resolve_source(params.source)
+
+    if src.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+        # ADR-012: картинка (фото-пост из TG или локальный файл) → vision-мост
+        caption_path = src.with_suffix(".caption.txt")
+        caption = (
+            caption_path.read_text(encoding="utf-8").strip()
+            if caption_path.exists()
+            else ""
+        )
+        description = describe_image(src)
+        transcript = (
+            f"{caption}\n\n{description}" if caption else description
+        ).strip()
+        out = params.output or (src.parent / f"{src.stem}.transcript.txt")
+        out.write_text(transcript, encoding="utf-8")
+        log.info("Saved image description: %s", out)
+        return TranscribeResult(transcript_path=out, transcript=transcript, meta={"vision": True})
+
     if not src.exists():
         fail(f"File not found: {src}")
     check_resource_limits(src)

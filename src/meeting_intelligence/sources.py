@@ -333,13 +333,30 @@ def resolve_tg_post_media(
             video = getattr(msg, "video", None)
             document = getattr(msg, "document", None)
             voice = getattr(msg, "voice", None)
-            if video is None and document is None and voice is None:
+            photo = getattr(msg, "photo", None)
+            if video is None and document is None and voice is None and photo is None:
                 fail(
                     f"Message {post_id} in {channel}: media type not supported "
-                    "(only video/document/voice; photos are out of scope)"
+                    "(only video/document/voice/photo; other types are out of scope)"
                 )
-            target = out / f"{channel}_{post_id}.mp4"
-            path = await client.download_media(msg, file=str(target))
+            caption = getattr(msg, "message", "") or ""
+            is_photo = (
+                photo is not None
+                and video is None
+                and document is None
+                and voice is None
+            )
+            if is_photo:
+                # ADR-012: фото → vision-конвейер; текст появится позже,
+                # здесь только скачиваем картинку и сохраняем подпись.
+                target = out / f"{channel}_{post_id}.jpg"
+                path = await client.download_media(msg, file=str(target))
+                Path(str(path)).with_suffix(".caption.txt").write_text(
+                    caption, encoding="utf-8"
+                )
+            else:
+                target = out / f"{channel}_{post_id}.mp4"
+                path = await client.download_media(msg, file=str(target))
             await client.disconnect()
         finally:
             shutil.rmtree(session_copy.parent, ignore_errors=True)
