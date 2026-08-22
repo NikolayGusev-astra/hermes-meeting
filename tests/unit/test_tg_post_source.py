@@ -70,6 +70,26 @@ def test_session_exists_accepts_telethon_suffix(tmp_path):
     assert sources._tg_session_exists(suffixed) is True
 
 
+def test_session_path_env_candidate_wins(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    sess = tmp_path / "tg-userbot" / "session_fixed.session"
+    sess.parent.mkdir(parents=True)
+    sess.write_bytes(b"s")
+    assert sources._tg_session_path() == sess.parent / "session_fixed"
+
+
+def test_session_path_falls_back_to_home(tmp_path, monkeypatch):
+    """$HERMES_HOME без сессии → ~/.hermes кандидат."""
+    empty = tmp_path / "emptyhome"
+    empty.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(empty))
+    home_cand = Path.home() / ".hermes" / "tg-userbot" / "session_fixed"
+    monkeypatch.setattr(
+        sources, "_tg_session_exists", lambda p: p == home_cand
+    )
+    assert sources._tg_session_path() == home_cand
+
+
 # ── resolve_tg_post_media (mocked telethon, no network) ───────────────────
 
 

@@ -122,10 +122,24 @@ def _parse_tg_post(source: str):
     return m.group("channel"), int(m.group("post"))
 
 
+def _tg_session_candidates() -> list:
+    """Кандидаты пути userbot-сессии: $HERMES_HOME, затем ~/.hermes."""
+    hermes_home = os.environ.get("HERMES_HOME")
+    cands = []
+    if hermes_home:
+        cands.append(Path(hermes_home) / "tg-userbot" / "session_fixed")
+    cands.append(Path.home() / ".hermes" / "tg-userbot" / "session_fixed")
+    return cands
+
+
 def _tg_session_path() -> Path:
-    """Resolve the local userbot session path (~/.hermes/tg-userbot/session_fixed)."""
-    hermes_home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
-    return hermes_home / "tg-userbot" / "session_fixed"
+    """Первый существующий кандидат (Telethon хранит <name>.session);
+    если ничего не найдено — первичный кандидат (для понятной ошибки)."""
+    cands = _tg_session_candidates()
+    for c in cands:
+        if _tg_session_exists(c):
+            return c
+    return cands[0]
 
 
 def _tg_session_exists(session: Path) -> bool:
@@ -266,6 +280,20 @@ async def _download_voice(msg, path: Path) -> None:
         Path(path).write_bytes(b"fake-ogg")
 
 
+def _copy_session_for_read(session: Path) -> Path:
+    """Копия .session во временную папку — живой юзербот держит SQLite-lock,
+    второй клиент по оригиналу падает с 'database is locked'. Ключ авторизации
+    статичен, копии достаточно для скачивания; копия удаляется после."""
+    import shutil
+    import tempfile
+
+    src = session if session.exists() else Path(str(session) + ".session")
+    tmpdir = Path(tempfile.mkdtemp(prefix="meeting-tg-sess-"))
+    dst = tmpdir / "session_copy"
+    shutil.copy2(src, Path(str(dst) + ".session"))
+    return dst
+
+
 def resolve_tg_post_media(
     channel: str,
     post_id: int,
@@ -277,6 +305,7 @@ def resolve_tg_post_media(
     Дальше файл идёт обычным конвейером (лимиты → ffmpeg → whisper).
     Приватные чаты ('t.me/c/<chat>/<post>') вне scope v1.
     """
+    import shutil
     import socks
 
     session = _tg_session_path()
@@ -291,11 +320,12 @@ def resolve_tg_post_media(
     proxy = (socks.SOCKS5, "127.0.0.1", 12334)
 
     async def _run() -> Path:
-        client = _tg_post_client(session, proxy)
-        await client.connect()
-        if not await client.is_user_authorized():
-            fail("Telegram userbot session is invalid (SESSION_INVALID)")
+        session_copy = _copy_session_for_read(session)
         try:
+            client = _tg_post_client(session_copy, proxy)
+            await client.connect()
+            if not await client.is_user_authorized():
+                fail("Telegram userbot session is invalid (SESSION_INVALID)")
             entity = await client.get_entity(channel)
             msg = await client.get_messages(entity, ids=int(post_id))
             if msg is None or getattr(msg, "media", None) is None:
@@ -310,8 +340,9 @@ def resolve_tg_post_media(
                 )
             target = out / f"{channel}_{post_id}.mp4"
             path = await client.download_media(msg, file=str(target))
-        finally:
             await client.disconnect()
+        finally:
+            shutil.rmtree(session_copy.parent, ignore_errors=True)
         return Path(path)
 
     import asyncio
