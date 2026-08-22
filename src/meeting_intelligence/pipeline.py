@@ -382,6 +382,8 @@ class TranscribeParams:
     speaker_label: Optional[str] = None
     tg_since: Optional[str] = None
     tg_limit: int = 3000
+    max_duration_sec: Optional[int] = None
+    max_file_mb: Optional[int] = None
 
 
 @dataclass
@@ -439,6 +441,8 @@ class ProcessParams:
     diarize: bool = False
     num_speakers: Optional[int] = None
     recognize: bool = False
+    max_duration_sec: Optional[int] = None
+    max_file_mb: Optional[int] = None
 
 
 @dataclass
@@ -523,7 +527,11 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
 
     if not src.exists():
         fail(f"File not found: {src}")
-    check_resource_limits(src)
+    check_resource_limits(
+        src,
+        max_duration_sec=params.max_duration_sec,
+        max_file_mb=params.max_file_mb,
+    )
     audio = (
         src
         if src.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac"}
@@ -627,6 +635,8 @@ def process(params: ProcessParams) -> ProcessResult:
             diarize=params.diarize,
             num_speakers=params.num_speakers,
             recognize=params.recognize,
+            max_duration_sec=params.max_duration_sec,
+            max_file_mb=params.max_file_mb,
         )
     )
     src = _resolve_source(params.source)

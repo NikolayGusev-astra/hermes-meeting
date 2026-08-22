@@ -50,11 +50,13 @@ def meeting_transcribe(
     num_speakers: int = 0,
     recognize: bool = False,
     output: str = "",
+    max_duration_sec: int = 0,
+    max_file_mb: int = 0,
 ) -> str:
     """Transcribe audio/video to a timestamped transcript file.
 
     Args:
-        source: Local file path or media URL.
+        source: Local file path, media URL, or Telegram post link (t.me/<channel>/<id>).
         model: Whisper model size (tiny, base, small, medium, large-v3-turbo).
         language: Source language code (en, ru, de, ...).
         device: cpu or cuda.
@@ -62,6 +64,9 @@ def meeting_transcribe(
         diarize: Enable speaker diarization (pyannote, offline; groups real speakers).
         num_speakers: Optional exact number of speakers (helps clustering); 0 = auto.
         output: Optional output file path.
+        max_duration_sec: Media duration limit in seconds; 0 = env/default (7200).
+            Raise for long streams (e.g. 10800 for a 3-hour recording).
+        max_file_mb: File size limit in MB; 0 = env/default (2048).
 
     Returns:
         JSON with transcript_path and meta, or error envelope.
@@ -78,6 +83,8 @@ def meeting_transcribe(
                 diarize=diarize,
                 num_speakers=(num_speakers or None),
                 recognize=recognize,
+                max_duration_sec=(max_duration_sec or None),
+                max_file_mb=(max_file_mb or None),
             )
         )
         return json.dumps(
@@ -202,11 +209,13 @@ def meeting_process(
     diarize: bool = False,
     num_speakers: int = 0,
     recognize: bool = False,
+    max_duration_sec: int = 0,
+    max_file_mb: int = 0,
 ) -> str:
     """Full pipeline: transcribe audio/video → translate → extract protocol.
 
     Args:
-        source: Local file path or media URL.
+        source: Local file path, media URL, or Telegram post link (t.me/<channel>/<id>).
         stt_model: Whisper model for speech-to-text.
         llm_model: LLM model for protocol extraction.
         language: Source language code.
@@ -216,6 +225,9 @@ def meeting_process(
         skip_translate: Skip the translation step.
         docx: Also write DOCX outputs.
         allow_cloud: Allow external (cloud) LLM endpoints.
+        max_duration_sec: Media duration limit in seconds; 0 = env/default (7200).
+            Raise for long streams (e.g. 10800 for a 3-hour recording).
+        max_file_mb: File size limit in MB; 0 = env/default (2048).
 
     Returns:
         JSON with transcript_path, protocol_path, and validity flag.
@@ -236,6 +248,8 @@ def meeting_process(
                 diarize=diarize,
                 num_speakers=(num_speakers or None),
                 recognize=recognize,
+                max_duration_sec=(max_duration_sec or None),
+                max_file_mb=(max_file_mb or None),
             )
         )
         return json.dumps(
