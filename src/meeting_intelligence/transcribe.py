@@ -115,7 +115,16 @@ def _wav_to_tensor(path: Path):
         data = data.reshape(-1, ch).mean(axis=1)
     if sr != 16000:
         n_out = int(round(data.shape[0] * 16000.0 / sr))
-        data = np.interp(np.linspace(0, data.shape[0] - 1, n_out), np.arange(data.shape[0]), data)
+        # np.interp всегда возвращает float64 — pyannote требует float32
+        # (иначе DoubleTensor падает на cudnn_batch_norm). См.
+        # tests/unit/test_wav_to_tensor.py::test_resampled_wav_stays_float32
+        data = (
+            np.interp(
+                np.linspace(0, data.shape[0] - 1, n_out),
+                np.arange(data.shape[0]),
+                data,
+            )
+        ).astype(np.float32)
         sr = 16000
     return torch.from_numpy(data).unsqueeze(0), sr
 
