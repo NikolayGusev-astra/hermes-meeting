@@ -104,10 +104,38 @@ def _is_tg_source(source: str) -> bool:
     return s.startswith("tg:") or "t.me/" in s or "t.me" in s
 
 
+# ── Telegram post media (ADR-011) ──────────────────────────────────────────
+
+import re as _re
+
+_TG_POST_RE = _re.compile(
+    r"^(?:tg:|https?://t\.me/|t\.me/)(?P<channel>[A-Za-z0-9_]+)/(?P<post>\d+)$"
+)
+
+
+def _parse_tg_post(source: str):
+    """'t.me/<ch>/<N>', 'https://t.me/<ch>/<N>' или 'tg:<ch>/<N>'
+    → ('<ch>', N); иначе None. Приватные 't.me/c/<chat>/<post>' вне scope v1."""
+    m = _TG_POST_RE.match(str(source).strip())
+    if not m:
+        return None
+    return m.group("channel"), int(m.group("post"))
+
+
 def _tg_session_path() -> Path:
     """Resolve the local userbot session path (~/.hermes/tg-userbot/session_fixed)."""
     hermes_home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
     return hermes_home / "tg-userbot" / "session_fixed"
+
+
+def _tg_post_client(session: Path, proxy):
+    """Build a telethon client for post resolution. Overridable in tests."""
+    import socks
+    from telethon import TelegramClient
+
+    API_ID = 37136103
+    API_HASH = "2a2d8d5ee29b99ca77f1fed10a454988"
+    return TelegramClient(str(session), API_ID, API_HASH, proxy=proxy)
 
 
 def resolve_tg_source(
@@ -231,3 +259,56 @@ async def _download_voice(msg, path: Path) -> None:
     else:
         # Test path: write a placeholder so the ref has a real file.
         Path(path).write_bytes(b"fake-ogg")
+
+
+def resolve_tg_post_media(
+    channel: str,
+    post_id: int,
+    output_dir: Path | None = None,
+) -> Path:
+    """Download the media attachment of one Telegram post (ADR-011).
+
+    ``t.me/<channel>/<post_id>`` → локальный файл (видео/документ/голос).
+    Дальше файл идёт обычным конвейером (лимиты → ffmpeg → whisper).
+    Приватные чаты ('t.me/c/<chat>/<post>') вне scope v1.
+    """
+    import socks
+
+    session = _tg_session_path()
+    if not session.exists():
+        fail(f"Telegram ingest requires a local userbot session: {session}")
+
+    if find_spec("telethon") is None:
+        fail("Telegram ingest requires telethon; install meeting-intelligence[tg]")
+
+    out = Path(output_dir) if output_dir else Path.cwd()
+    out.mkdir(parents=True, exist_ok=True)
+    proxy = (socks.SOCKS5, "127.0.0.1", 12334)
+
+    async def _run() -> Path:
+        client = _tg_post_client(session, proxy)
+        await client.connect()
+        if not await client.is_user_authorized():
+            fail("Telegram userbot session is invalid (SESSION_INVALID)")
+        try:
+            entity = await client.get_entity(channel)
+            msg = await client.get_messages(entity, ids=int(post_id))
+            if msg is None or getattr(msg, "media", None) is None:
+                fail(f"Message {post_id} in {channel} has no downloadable media")
+            video = getattr(msg, "video", None)
+            document = getattr(msg, "document", None)
+            voice = getattr(msg, "voice", None)
+            if video is None and document is None and voice is None:
+                fail(
+                    f"Message {post_id} in {channel}: media type not supported "
+                    "(only video/document/voice; photos are out of scope)"
+                )
+            target = out / f"{channel}_{post_id}.mp4"
+            path = await client.download_media(msg, file=str(target))
+        finally:
+            await client.disconnect()
+        return Path(path)
+
+    import asyncio
+
+    return asyncio.run(_run())

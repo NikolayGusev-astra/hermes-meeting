@@ -31,8 +31,10 @@ from .sources import (
     MeetingError,
     _is_tg_source,
     _is_url,
+    _parse_tg_post,
     _resolve_source,
     fail,
+    resolve_tg_post_media,
     resolve_tg_source,
 )  # noqa: F401
 from .transcribe import _clean_whisper_artifacts, transcribe_audio  # noqa: F401
@@ -459,7 +461,19 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
     DM speaker attribution → group into meetings (ADR-010). The first meeting's
     folder is returned as ``transcript_path`` for backward-compatible callers.
     """
-    if _is_tg_source(params.source):
+    parsed_post = _parse_tg_post(params.source)
+    if parsed_post is not None:
+        # ADR-011: конкретный пост → медиа-вложение → файловая ветка
+        import tempfile as _tempfile
+
+        channel, post_id = parsed_post
+        out_dir = (
+            params.output.parent
+            if params.output
+            else Path(_tempfile.mkdtemp(prefix="meeting-tg-post-"))
+        )
+        src = resolve_tg_post_media(channel, post_id, output_dir=out_dir)
+    elif _is_tg_source(params.source):
         from .ingest import ingest_telegram
 
         meetings = ingest_telegram(
@@ -486,7 +500,8 @@ def transcribe(params: TranscribeParams) -> TranscribeResult:
             transcript_path=folder, transcript=transcript, meta={"meetings": len(meetings)}
         )
 
-    src = _resolve_source(params.source)
+    else:
+        src = _resolve_source(params.source)
     if not src.exists():
         fail(f"File not found: {src}")
     check_resource_limits(src)
