@@ -75,6 +75,39 @@ def test_describe_image_ocr_mode_uses_ocr_backend(monkeypatch, tmp_path):
     assert "Markdown" in captured["body"]["messages"][0]["content"][1]["text"]
 
 
+def test_vl_mode_prefers_dedicated_url(monkeypatch, tmp_path):
+    """MEETING_VISION_BASE_URL отвязывает vl от общего LM Studio адреса."""
+    img = tmp_path / "x.jpg"
+    img.write_bytes(b"x")
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setenv("MEETING_VISION_BASE_URL", "http://127.0.0.1:8018/v1")
+    monkeypatch.delenv("MEETING_LLM_BASE_URL", raising=False)
+    monkeypatch.setattr(vision, "urlopen", fake_urlopen)
+    vision.describe_image(img)
+    assert "127.0.0.1:8018" in captured["url"]
+
+
+def test_vl_mode_falls_back_to_llm_base_url(monkeypatch, tmp_path):
+    """Без выделенного адреса — старое поведение (LM Studio)."""
+    img = tmp_path / "x.jpg"
+    img.write_bytes(b"x")
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.delenv("MEETING_VISION_BASE_URL", raising=False)
+    monkeypatch.setattr(vision, "urlopen", fake_urlopen)
+    vision.describe_image(img)
+    assert "localhost:1234" in captured["url"]
+
+
 def test_describe_image_unreachable_fails_with_hint(monkeypatch, tmp_path):
     import urllib.error
 

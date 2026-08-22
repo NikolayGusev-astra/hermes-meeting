@@ -158,6 +158,30 @@ export MEETING_LLM_API_KEY="$OPENAI_API_KEY"
 export MEETING_LLM_MODEL=gpt-4o-mini
 ```
 
+### Vision / OCR backends (photo posts, ADR-012)
+
+Photo posts and local images are described by a **local** vision model — no
+LM Studio required. Two standalone llama.cpp servers, launched by one script:
+
+```bash
+python scripts/start_vision_servers.py   # vision :8018 (LFM2.5-VL-3B) + ocr :8017 (OvisOCR2)
+```
+
+```bash
+# vision via dedicated llama.cpp (recommended; survives LM Studio restarts)
+export MEETING_VISION_BASE_URL=http://127.0.0.1:8018/v1
+export MEETING_VISION_MODEL=lfm2.5-vl-3b
+
+# document/scan mode instead of photo description:
+export MEETING_VISION_MODE=ocr           # uses :8017 OvisOCR2 → Markdown
+
+# fully without LM Studio: point the protocol LLM at llama.cpp too
+# export MEETING_LLM_BASE_URL=http://127.0.0.1:8019/v1  (launch your text model there)
+```
+
+Without `MEETING_VISION_BASE_URL` the vl mode falls back to
+`MEETING_LLM_BASE_URL` (LM Studio default) — old behavior preserved.
+
 > **PowerShell:** replace `export NAME=value` with `$env:NAME = "value"`.
 
 ---
@@ -330,6 +354,10 @@ Every function returns a typed dataclass (`TranscribeResult`,
 | Variable | Default | Description |
 | --- | --- | --- |
 | `MEETING_LLM_BASE_URL` | `http://localhost:1234/v1` | LLM API endpoint |
+| `MEETING_VISION_BASE_URL` | falls back to `MEETING_LLM_BASE_URL` | Dedicated vision endpoint (standalone llama.cpp :8018) |
+| `MEETING_VISION_MODEL` | `lfm2.5-vl-3b` | Vision model name for the vl backend |
+| `MEETING_VISION_MODE` | `vl` | `vl` (photo description) or `ocr` (document → Markdown, OvisOCR2 :8017) |
+| `MEETING_OCR_BASE_URL` | `http://127.0.0.1:8017/v1` | OCR backend endpoint |
 | `MEETING_LLM_API_KEY` | `lm-studio` | LLM API key |
 | `MEETING_LLM_MODEL` | `qwen2.5-7b-instruct` | LLM model name |
 | `MEETING_ALLOW_CLOUD` | _(unset)_ | Set `true` to permit non-loopback endpoints |

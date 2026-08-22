@@ -44,7 +44,12 @@ def _backend_url(mode: str) -> str:
     if mode == "ocr":
         base = os.getenv("MEETING_OCR_BASE_URL", "http://127.0.0.1:8017/v1")
     else:
-        base = os.getenv("MEETING_LLM_BASE_URL", "http://localhost:1234/v1")
+        # Выделенный llama.cpp (:8018) приоритетнее общего LM Studio —
+        # vision не зависит от того, какая модель загружена в GUI.
+        base = os.getenv(
+            "MEETING_VISION_BASE_URL",
+            os.getenv("MEETING_LLM_BASE_URL", "http://localhost:1234/v1"),
+        )
     return base.rstrip("/") + "/chat/completions"
 
 
