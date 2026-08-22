@@ -436,14 +436,13 @@ def label_speaker(name: str, label: str, body: dict = Body(default={})):
     return {"ok": True, "short": short, "full_name": full_name, "wiki_synced": wiki_synced}
 
 
-@router.get("/meetings/{name}/file/{filename}")
-def get_meeting_file(name: str, filename: str):
-    """Отдать байты артефакта встречи для открытия/скачивания из UI.
+def _resolve_meeting_artifact(name: str, filename: str) -> Path:
+    """Резолв артефакта встречи с path-traversal защитой (для всех /file/ роутов).
 
-    Path-traversal защищён дважды: берём только basename имени каталога и файла
-    (любые '..' / '/' обрезаются) И проверяем, что resolved-путь остался внутри
-    resolved-корня. Отдаём только «артефактные» расширения (документы/транскрипты),
-    чтобы не светить служебные файлы (generate_docs.py и т.п.).
+    Защита двойная: берём только basename имени каталога и файла (любые '..' /
+    '/' обрезаются) И проверяем, что resolved-путь остался внутри resolved-корня.
+    Отдаём только «артефактные» расширения (документы/транскрипты), чтобы не
+    светить служебные файлы (generate_docs.py и т.п.).
     """
     root = _meeting_root().resolve()
     safe_name = Path(name).name
@@ -457,8 +456,38 @@ def get_meeting_file(name: str, filename: str):
         raise HTTPException(status_code=404, detail="file not found")
     if target.name in _IGNORE or target.suffix.lower() not in (_OUTPUT_EXTS | _TRANSCRIPT_EXTS):
         raise HTTPException(status_code=404, detail="file not found")
+    return target
 
-    return FileResponse(str(target), filename=safe_file)
+
+@router.get("/meetings/{name}/file/{filename}")
+def get_meeting_file(name: str, filename: str):
+    """Отдать байты артефакта встречи для скачивания из UI."""
+    target = _resolve_meeting_artifact(name, filename)
+    return FileResponse(str(target), filename=target.name)
+
+
+@router.post("/meetings/{name}/file/{filename}/open")
+def open_meeting_file(name: str, filename: str):
+    """Открыть артефакт встречи в ассоциированном приложении ОС.
+
+    Desktop-вьюпорт не имеет офис-вьюера, а Blob+download лишь сохраняет файл —
+    поэтому открытие (.docx в Word/LibreOffice, .xlsx в Excel, .txt в блокноте)
+    делает бэкенд: os.startfile (Windows) / open (macOS) / xg-open (Linux).
+    Файл уже прошёл path-traversal и расширительную проверку в резолвере.
+    """
+    target = _resolve_meeting_artifact(name, filename)
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(target))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["xdg-open", str(target)], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"could not open file: {exc}")
+    return {"ok": True, "path": str(target)}
 
 
 @router.get("/meetings/{name}/file/{filename}/data")
@@ -469,17 +498,7 @@ def get_meeting_file_data(name: str, filename: str):
     UI тащит файл этим роутом (через authed ctx.rest) и собирает Blob на клиенте.
     """
     import base64 as _b64
-    root = _meeting_root().resolve()
-    safe_name = Path(name).name
-    meeting = (root / safe_name).resolve()
-    if not _safe_within(meeting, root) or not meeting.is_dir():
-        raise HTTPException(status_code=404, detail="meeting not found")
-    safe_file = Path(filename).name
-    target = (meeting / safe_file).resolve()
-    if not _safe_within(target, meeting) or not target.is_file():
-        raise HTTPException(status_code=404, detail="file not found")
-    if target.name in _IGNORE or target.suffix.lower() not in (_OUTPUT_EXTS | _TRANSCRIPT_EXTS):
-        raise HTTPException(status_code=404, detail="file not found")
+    target = _resolve_meeting_artifact(name, filename)
     ext = target.suffix.lower()
     ct = {
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -490,7 +509,7 @@ def get_meeting_file_data(name: str, filename: str):
         ".vtt": "text/vtt",
     }.get(ext, "application/octet-stream")
     data = target.read_bytes()
-    return {"filename": safe_file, "size": len(data), "contentType": ct,
+    return {"filename": target.name, "size": len(data), "contentType": ct,
             "base64": _b64.b64encode(data).decode("ascii")}
 
 

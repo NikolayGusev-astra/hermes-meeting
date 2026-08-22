@@ -60,9 +60,20 @@ const parseRest = (r) => {
 }
 
 const MOUNT = '/api/plugins/meeting-intelligence'
-const openFile = async (name, file) => {
-  // Скачивание через authed ctx.rest (JSON+base64): прямой <a href> на /file/
-  // не проходит auth/origin в desktop-вьюпорте → файл не сохранялся молча.
+const openFile = async (name, file, forceDownload) => {
+  // Открытие артефакта: бэкенд открывает файл в приложении ОС (Word/Excel/блокнот)
+  // через POST .../file/<name>/open (os.startfile / open / xdg-open). Вебвью
+  // сам не умеет рендерить .docx, а Blob+a.download лишь сохраняет файл.
+  // Скачивание (authed ctx.rest → JSON+base64 → Blob) — фолбэк и Shift+клик.
+  if (!forceDownload) {
+    try {
+      const r = await restCall('/meetings/' + encodeURIComponent(name) + '/file/' + encodeURIComponent(file) + '/open', { method: 'POST' })
+      if (r && r.ok) return
+      throw new Error((r && r.detail) || 'бэкенд не открыл файл')
+    } catch (e) {
+      try { host.notify({ kind: 'error', message: 'Не удалось открыть файл (' + (((e && e.message) || e)) + ') — скачиваю копию.' }) } catch (_) {}
+    }
+  }
   try {
     const d = await restGet('/meetings/' + encodeURIComponent(name) + '/file/' + encodeURIComponent(file) + '/data')
     if (!d || !d.base64) throw new Error('нет данных файла')
@@ -386,7 +397,7 @@ function MeetingCard({ m, expanded, onToggle }) {
     expanded ? jsxs('div', { className: 'm-body', children: [
       docs.length ? jsxs('div', { className: 'm-grp', children: [
         jsx('div', { className: 'm-grp-l', children: 'Документы — нажмите, чтобы открыть' }),
-        jsx('div', { className: 'm-chips', children: docs.map((a) => jsxs('button', { className: 'm-chip doc', title: a.path, onClick: () => openFile(m.name, a.file), children: [
+        jsx('div', { className: 'm-chips', children: docs.map((a) => jsxs('button', { className: 'm-chip doc', title: (a.path || '') + ' · Shift+клик — скачать', onClick: (e) => openFile(m.name, a.file, e.shiftKey), children: [
           jsx('span', { children: artLabel(a) }),
           jsx('span', { className: 'm-ext', children: (a.ext || 'doc').toUpperCase() }),
           a.size ? jsx('span', { className: 'm-size', children: fmtSize(a.size) }) : null,
@@ -394,7 +405,7 @@ function MeetingCard({ m, expanded, onToggle }) {
       ] }) : null,
       txts.length ? jsxs('div', { className: 'm-grp', children: [
         jsx('div', { className: 'm-grp-l', children: 'Транскрипты' }),
-        jsx('div', { className: 'm-chips', children: txts.map((a) => jsxs('button', { className: 'm-chip txt', title: a.path, onClick: () => openFile(m.name, a.file), children: [
+        jsx('div', { className: 'm-chips', children: txts.map((a) => jsxs('button', { className: 'm-chip txt', title: (a.path || '') + ' · Shift+клик — скачать', onClick: (e) => openFile(m.name, a.file, e.shiftKey), children: [
           jsx('span', { children: artLabel(a) }),
           a.size ? jsx('span', { className: 'm-size', children: fmtSize(a.size) }) : null,
         ] }, a.file)) }),
@@ -516,7 +527,8 @@ function DiskStatus({ data }) {
 }
 
 function MeetingsApp() {
-  const { data: raw, isLoading, error } = useQuery({ queryKey: ['meet', 'list'], queryFn: async () => parseRest(await restGet('/meetings')), refetchInterval: 60000 })
+  // Пока идёт обработка (pendingJob) — рефреш 10 с, чтобы «Готово» появилось быстро; иначе 60 с.
+  const { data: raw, isLoading, error } = useQuery({ queryKey: ['meet', 'list'], queryFn: async () => parseRest(await restGet('/meetings')), refetchInterval: () => (loadPending() ? 10000 : 60000) })
   const cfgQ = useQuery({ queryKey: ['meet', 'storage'], queryFn: () => restGet('/storage/config'), refetchInterval: 0 })
   const diskQ = useQuery({ queryKey: ['meet', 'disk'], queryFn: () => restGet('/storage/status'), refetchInterval: 300000 })
   const [q, setQ] = useState('')
